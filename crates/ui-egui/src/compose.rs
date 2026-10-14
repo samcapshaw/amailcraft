@@ -215,7 +215,7 @@ pub fn compose_windows(ctx: &egui::Context, app: &mut App) {
         };
         let builder = ViewportBuilder::default()
             .with_title(c.title())
-            .with_inner_size(DEFAULT_SIZE)
+            .with_inner_size(if app.mac_style { [860.0, 680.0] } else { DEFAULT_SIZE })
             .with_min_inner_size(MIN_SIZE);
         ctx.show_viewport_immediate(viewport_id(cid), builder, |ui, class| {
             compose_viewport(ui, app, cid, class)
@@ -287,8 +287,11 @@ pub fn inline_compose(ui: &mut Ui, app: &mut App, id: u64) {
         if !app.s.composes.contains_key(&id) {
             return;
         }
+        if app.mac_style {
+            mac_toolbar(ui, app, id);
+        }
         header(ui, app, id);
-        attach::well(ui, app, id, WELL_INDENT);
+        attach::well(ui, app, id, if app.mac_style { MARGIN + NAME_BTN.x + GAP } else { WELL_INDENT });
         separator(ui, app);
         let h = ui.available_height();
         let min_h = if h.is_finite() && h < 4000.0 { h.max(160.0) } else { 240.0 };
@@ -333,10 +336,13 @@ fn compose_viewport(ui: &mut Ui, app: &mut App, cid: u64, class: ViewportClass) 
             crate::backstage::compose_backstage(ui, app, cid);
             return;
         }
-        if !tiny || embedded {
+        if app.mac_style {
+            mac_toolbar(ui, app, cid);
+        }
+        if !app.mac_style && (!tiny || embedded) {
             quick_access(ui, app, cid, embedded, tiny);
         }
-        if !tiny {
+        if !tiny && !app.mac_style {
             tab_row(ui, app, cid);
             crate::ribbon::ribbon(ui, app, Surface::Compose(cid), &frame);
         }
@@ -345,7 +351,7 @@ fn compose_viewport(ui: &mut Ui, app: &mut App, cid: u64, class: ViewportClass) 
         }
         ui.add_space(8.0);
         header(ui, app, cid);
-        attach::well(ui, app, cid, WELL_INDENT);
+        attach::well(ui, app, cid, if app.mac_style { MARGIN + NAME_BTN.x + GAP } else { WELL_INDENT });
         separator(ui, app);
         panes::body_with_panes(ui, app, cid, 0.0, true);
     });
@@ -669,7 +675,7 @@ fn header(ui: &mut Ui, app: &mut App, cid: u64) {
         return;
     };
     let mut rows: Vec<Field> = Vec::new();
-    if c.show_from {
+    if c.show_from || app.mac_style {
         rows.push(Field::From);
     }
     rows.extend([Field::To, Field::Cc]);
@@ -688,17 +694,18 @@ fn header(ui: &mut Ui, app: &mut App, cid: u64) {
 
     let width = ui.available_width();
     let rows_h = ROW_H * rows.len() as f32;
-    let height = rows_h.max(SEND_SIZE.y) + 4.0;
+    let height = rows_h.max(if app.mac_style { 0.0 } else { SEND_SIZE.y }) + 4.0;
     let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let left = rect.left() + MARGIN;
-    let send_rect = Rect::from_min_size(pos2(left, rect.top()), SEND_SIZE);
-    if send_button(ui, app, send_rect).clicked() {
+    let send_rect =
+        Rect::from_min_size(pos2(left, rect.top()), if app.mac_style { vec2(0.0, 0.0) } else { SEND_SIZE });
+    if !app.mac_style && send_button(ui, app, send_rect).clicked() {
         app.run("compose.send", json!({"compose": cid}));
         if !app.s.composes.contains_key(&cid) {
             return;
         }
     }
-    let btn_x = send_rect.right() + MARGIN;
+    let btn_x = if app.mac_style { left } else { send_rect.right() + MARGIN };
     let field_x = btn_x + NAME_BTN.x + GAP;
     let field_r = (rect.right() - MARGIN).max(field_x + 20.0);
     for (i, f) in rows.into_iter().enumerate() {
@@ -736,5 +743,49 @@ fn header(ui: &mut Ui, app: &mut App, cid: u64) {
             Field::To | Field::Cc | Field::Bcc => recipients::address_field(ui, app, cid, f, field, label_id),
             Field::From | Field::Subject => field_edit(ui, app, cid, f, field, label_id),
         }
+    }
+}
+
+/// Compact compose tools. Advanced formatting stays available on demand.
+fn mac_toolbar(ui: &mut Ui, app: &mut App, cid: u64) {
+    let params = json!({"compose": cid});
+    egui::Frame::new().fill(app.theme.chrome).inner_margin(10).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            if crate::widgets::icon_button(ui, app, "send", "Send", true).clicked() {
+                app.run("compose.send", params.clone());
+            }
+            if crate::widgets::icon_button(ui, app, "attach", "Attach", true).clicked() {
+                let ctx = ui.ctx().clone();
+                if !ribbon_command(&ctx, app, cid, "compose.attachFile", &params) {
+                    app.run("compose.attachFile", params.clone());
+                }
+            }
+            ui.menu_button("Message", |ui| {
+                for (label, cmd) in [
+                    ("Save draft", "compose.saveDraft"),
+                    ("Show Bcc", "compose.showBcc"),
+                    ("Check spelling", "review.spelling"),
+                ] {
+                    if ui.button(label).clicked() {
+                        let ctx = ui.ctx().clone();
+                        if !ribbon_command(&ctx, app, cid, cmd, &params) {
+                            app.run(cmd, params.clone());
+                        }
+                        ui.close();
+                    }
+                }
+            });
+            let id = Id::new(("mac-compose-format", cid));
+            let mut show = ui.ctx().data_mut(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+            if ui.selectable_label(show, "Formatting").clicked() {
+                show = !show;
+                ui.ctx().data_mut(|d| d.insert_temp(id, show));
+            }
+        });
+    });
+    if ui.ctx().data_mut(|d| d.get_temp::<bool>(Id::new(("mac-compose-format", cid)))).unwrap_or(false) {
+        let frame = Frame::compute(ui.available_width(), ui.available_height());
+        tab_row(ui, app, cid);
+        crate::ribbon::ribbon(ui, app, Surface::Compose(cid), &frame);
     }
 }

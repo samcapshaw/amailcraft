@@ -132,7 +132,11 @@ pub(crate) fn param_folder(s: &Session, p: &Value) -> Result<Option<FolderId>, C
 
 /// List order of the selected folder (newest first), used to pick the neighbour after items leave it.
 fn list_order(s: &Session) -> Vec<ItemId> {
-    let mut items = s.mailbox.items_in(s.selection.folder);
+    let mut items = if s.view.unified_inbox {
+        crate::queries::inbox_items(s)
+    } else {
+        s.mailbox.items_in(s.selection.folder)
+    };
     items.sort_by(|a, b| b.received.unix.cmp(&a.received.unix).then(b.id.cmp(&a.id)));
     items.into_iter().map(|m| m.id).collect()
 }
@@ -141,7 +145,15 @@ fn list_order(s: &Session) -> Vec<ItemId> {
 /// selects the neighbouring item (the next one below, else the one above), as Delete does.
 fn reselect(s: &mut Session, order_before: &[ItemId]) {
     let folder = s.selection.folder;
-    let present = |s: &Session, id: &ItemId| s.mailbox.mail.get(id).is_some_and(|m| m.folder == folder);
+    let present = |s: &Session, id: &ItemId| {
+        s.mailbox.mail.get(id).is_some_and(|m| {
+            if s.view.unified_inbox {
+                s.mailbox.folder(m.folder).is_some_and(|f| f.role == Some(FolderRole::Inbox))
+            } else {
+                m.folder == folder
+            }
+        })
+    };
     let selected: BTreeSet<ItemId> = s.selection.items.iter().copied().chain(s.selection.focus).collect();
     let gone: Vec<usize> = order_before
         .iter()
@@ -1157,8 +1169,14 @@ fn toggle_read(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn mark_all_read(s: &mut Session, p: &Value) -> CmdResult {
-    let folder = param_folder(s, p)?.unwrap_or(s.selection.folder);
-    let ids: Vec<ItemId> = s.mailbox.items_in(folder).iter().map(|m| m.id).collect();
+    let explicit = param_folder(s, p)?;
+    let folder = explicit.unwrap_or(s.selection.folder);
+    let items = if s.view.unified_inbox && explicit.is_none() {
+        crate::queries::inbox_items(s)
+    } else {
+        s.mailbox.items_in(folder)
+    };
+    let ids: Vec<ItemId> = items.iter().map(|m| m.id).collect();
     set_read(s, &ids, true)
 }
 

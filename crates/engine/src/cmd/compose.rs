@@ -216,6 +216,17 @@ pub(crate) fn parse_when(s: &Session, text: &str) -> Option<DateTime> {
 /// the current folder's account, else any account that can send. With `need_send`, only sending accounts.
 pub(crate) fn sending_account(s: &Session, c: &ComposeState, need_send: bool) -> Option<Account> {
     let from = parse_field_mailbox(&c.from);
+    // An explicit receive-only shared identity must never fall back to the personal SMTP account.
+    if need_send
+        && from.as_ref().is_some_and(|m| {
+            s.mailbox.accounts.iter().any(|a| {
+                a.address.eq_ignore_ascii_case(&m.addr)
+                    && a.linked_mailbox.as_ref().is_some_and(|l| !l.send_as)
+            })
+        })
+    {
+        return None;
+    }
     let ok = |a: &&Account| !need_send || a.can_send();
     let by_from = from.as_ref().and_then(|m| {
         s.mailbox
@@ -4771,5 +4782,31 @@ Original-Message-ID: <{mid}>\r\nDisposition: manual-action/MDN-sent-manually; di
         assert!(tracking(&s, sent).unwrap().receipts.is_empty());
         set(&mut s, "mail.tracking.updateSentItem", json!(true));
         assert_eq!(tracking(&s, sent).unwrap().receipts.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod shared_identity_tests {
+    use super::*;
+    #[test]
+    fn receive_only_identity_never_uses_personal_smtp() {
+        let mut s = Session::new(mailcraft_model::Mailbox::new_local("Local"));
+        s.mailbox.add_account(Account {
+            kind: mailcraft_model::AccountKind::Imap,
+            address: "me@example.com".into(),
+            outgoing: Some(Default::default()),
+            is_default: true,
+            ..Default::default()
+        });
+        s.mailbox.add_account(Account {
+            kind: mailcraft_model::AccountKind::Imap,
+            address: "team@example.com".into(),
+            outgoing: Some(Default::default()),
+            linked_mailbox: Some(Default::default()),
+            ..Default::default()
+        });
+        let c = ComposeState { from: "team@example.com".into(), ..Default::default() };
+        assert!(sending_account(&s, &c, true).is_none());
+        assert!(sending_account(&s, &c, false).is_some());
     }
 }

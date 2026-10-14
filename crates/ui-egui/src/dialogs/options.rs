@@ -236,6 +236,9 @@ pub(crate) fn show(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                     .insert(key.to_owned(), json!(app.s.mailbox.folder_path(mailcraft_model::FolderId(f))));
             }
         }
+        if app.mac_style {
+            return mac_options(ctx, app, d, uid, st);
+        }
         window(ctx, app, d, "MailCraft Options", 820.0, |ui, app| {
             let mut out = Out::Keep;
             let h = (ctx.content_rect().height() - 170.0).clamp(240.0, 560.0);
@@ -297,6 +300,387 @@ pub(crate) fn show(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
     })
 }
 
+/// Mac settings keep navigation separate from grouped, consistently aligned forms.
+fn mac_options(ctx: &Context, app: &mut App, d: &Dlg<'_>, uid: u64, st: &mut OptState) -> Out {
+    window(ctx, app, d, "Settings", 880.0, |ui, app| {
+        let mut out = Out::Keep;
+        let card = if app.theme.dark { egui::Color32::from_rgb(43, 44, 48) } else { egui::Color32::WHITE };
+        let edge = if app.theme.dark {
+            egui::Color32::from_rgb(62, 63, 68)
+        } else {
+            egui::Color32::from_rgb(224, 227, 233)
+        };
+        ui.spacing_mut().interact_size.y = 28.0;
+        ui.spacing_mut().button_padding = egui::vec2(9.0, 5.0);
+        ui.visuals_mut().widgets.inactive.bg_fill = if app.theme.dark {
+            egui::Color32::from_rgb(35, 36, 39)
+        } else {
+            egui::Color32::from_rgb(249, 250, 252)
+        };
+        ui.visuals_mut().widgets.inactive.weak_bg_fill = ui.visuals().widgets.inactive.bg_fill;
+        ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(0.7, edge);
+        ui.visuals_mut().widgets.inactive.corner_radius = egui::CornerRadius::same(6);
+        let height = (ctx.content_rect().height() - 230.0).clamp(240.0, 490.0);
+        ui.add_space(8.0);
+        ui.horizontal_top(|ui| {
+            egui::Frame::new().fill(app.theme.chrome).corner_radius(10).inner_margin(10).show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(170.0);
+                    ui.set_min_height(height + 60.0);
+                    ui.label(RichText::new("MAILCRAFT").size(10.0).color(app.theme.text_muted));
+                    ui.add_space(9.0);
+                    for (i, (_, title)) in settings::PAGES.iter().enumerate() {
+                        if i == 7 || i == 10 {
+                            ui.add_space(12.0);
+                        }
+                        let selected = st.page == i;
+                        let (rect, r) = ui.allocate_exact_size(egui::vec2(170.0, 28.0), egui::Sense::click());
+                        if selected || r.hovered() {
+                            if selected {
+                                ui.painter().rect_filled(
+                                    rect.translate(egui::vec2(0.0, 1.0)),
+                                    6,
+                                    egui::Color32::from_black_alpha(if app.theme.dark { 25 } else { 10 }),
+                                );
+                            }
+                            ui.painter().rect_filled(rect, 6, if selected { card } else { app.theme.hover });
+                        }
+                        let icon = match i {
+                            1 => "mail",
+                            2 => "calendar",
+                            3 => "people",
+                            4 => "person",
+                            5 => "tasks",
+                            6 => "search",
+                            9 => "ellipsis",
+                            10 => "ribbon-display",
+                            11 => "quick-steps",
+                            12 => "plus",
+                            13 => "private",
+                            _ => "settings",
+                        };
+                        app.icons.paint(
+                            ui,
+                            egui::Rect::from_center_size(
+                                rect.left_center() + egui::vec2(18.0, 0.0),
+                                egui::vec2(14.0, 14.0),
+                            ),
+                            icon,
+                            if selected { app.theme.text } else { app.theme.text_muted },
+                        );
+                        ui.painter().text(
+                            rect.left_center() + egui::vec2(35.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            title,
+                            egui::FontId::proportional(12.0),
+                            if selected { app.theme.text } else { app.theme.text_muted },
+                        );
+                        r.widget_info(|| {
+                            egui::WidgetInfo::selected(
+                                egui::WidgetType::SelectableLabel,
+                                true,
+                                selected,
+                                *title,
+                            )
+                        });
+                        if r.clicked() {
+                            st.page = i;
+                            st.scroll_to = None;
+                            st.note.clear();
+                        }
+                    }
+                    ui.add_space(12.0);
+                    if ui.add_sized([170.0, 28.0], egui::Button::new("Accounts…")).clicked() {
+                        out = Out::open("accountSettings", json!({}));
+                    }
+                });
+            });
+            ui.add_space(16.0);
+            ui.vertical(|ui| {
+                ui.set_width((ui.available_width() - 8.0).max(250.0));
+                let Some((pid, title)) = settings::PAGES.get(st.page).copied() else {
+                    return;
+                };
+                ui.add_space(3.0);
+                ui.label(RichText::new(title).size(25.0));
+                let desc = DESCRIPTIONS.iter().find(|(p, _)| *p == pid).map_or("", |(_, t)| *t);
+                ui.label(RichText::new(desc).size(12.0).color(app.theme.text_muted));
+                ui.add_space(16.0);
+                egui::ScrollArea::vertical()
+                    .id_salt(("mac-settings", uid, pid))
+                    .max_height(height)
+                    .min_scrolled_height(height)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let mut groups = sections(pid);
+                        if pid == "general" {
+                            groups.sort_by_key(|sec| match sec.heading {
+                                "Personalize your copy of MailCraft" => 0,
+                                "User Interface options" => 1,
+                                "Start up options" => 2,
+                                _ => 3,
+                            });
+                        }
+                        for sec in groups {
+                            if st.scroll_to.as_deref() == Some(sec.heading) {
+                                ui.scroll_to_cursor(Some(egui::Align::TOP));
+                                st.scroll_to = None;
+                            }
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(match sec.heading {
+                                    "Personalize your copy of MailCraft" => "Profile & appearance",
+                                    "User Interface options" => "Interface",
+                                    "Start up options" => "Startup",
+                                    other => other,
+                                })
+                                .size(12.0)
+                                .strong()
+                                .color(app.theme.text_muted),
+                            );
+                            ui.add_space(7.0);
+                            egui::Frame::new()
+                                .fill(card)
+                                .stroke(egui::Stroke::new(0.6, edge))
+                                .corner_radius(10)
+                                .shadow(egui::Shadow {
+                                    offset: [0, 2],
+                                    blur: 7,
+                                    spread: 0,
+                                    color: egui::Color32::from_black_alpha(if app.theme.dark {
+                                        24
+                                    } else {
+                                        9
+                                    }),
+                                })
+                                .inner_margin(16)
+                                .show(ui, |ui| {
+                                    ui.set_width((ui.available_width() - 4.0).max(200.0));
+                                    ui.spacing_mut().item_spacing.y = 5.0;
+                                    for (i, def) in sec.defs.iter().enumerate() {
+                                        if i > 0 {
+                                            let (r, _) = ui.allocate_exact_size(
+                                                egui::vec2(ui.available_width(), 1.0),
+                                                egui::Sense::hover(),
+                                            );
+                                            ui.painter().hline(
+                                                r.x_range(),
+                                                r.center().y,
+                                                egui::Stroke::new(0.5, edge.gamma_multiply(0.7)),
+                                            );
+                                        }
+                                        let on = enabled(app, st, def.key);
+                                        ui.add_enabled_ui(on, |ui| setting_ui(ui, app, uid, st, def));
+                                    }
+                                    for (_, _, text) in
+                                        NOTES.iter().filter(|(p, s, _)| *p == pid && *s == sec.heading)
+                                    {
+                                        muted(ui, app, text);
+                                    }
+                                    if BUTTONS.iter().any(|(p, s, _, _)| *p == pid && *s == sec.heading) {
+                                        ui.horizontal_wrapped(|ui| {
+                                            for (_, _, label, action) in BUTTONS
+                                                .iter()
+                                                .filter(|(p, s, _, _)| *p == pid && *s == sec.heading)
+                                            {
+                                                if ui.button(*label).clicked() {
+                                                    match action {
+                                                        Dialog(name) => out = Out::open(name, json!({})),
+                                                        Cmd(id) => {
+                                                            app.run(id, json!({}));
+                                                        }
+                                                        PickFolder(key) => {
+                                                            out = Out::open(
+                                                                "pickFolder",
+                                                                common::child(
+                                                                    uid,
+                                                                    &format!("folder:{key}"),
+                                                                    json!({"pick": "any"}),
+                                                                ),
+                                                            )
+                                                        }
+                                                        Info(note) => st.note = (*note).into(),
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    }
+                                });
+                            ui.add_space(17.0);
+                        }
+                    });
+            });
+        });
+        if !st.note.is_empty() {
+            muted(ui, app, &st.note);
+        }
+        for error in &st.errors {
+            ui.colored_label(app.theme.danger, error);
+        }
+        if !matches!(out, Out::Keep) {
+            return out;
+        }
+        ui.add_space(16.0);
+        ui.separator();
+        ui.add_space(5.0);
+        footer(ui, |ui| {
+            if btn(ui, "Cancel") {
+                return Out::Close;
+            }
+            if primary(ui, app, true, "Save Changes") {
+                st.errors = apply(ctx, app, st);
+                if st.errors.is_empty() {
+                    return Out::Close;
+                }
+            }
+            Out::Keep
+        })
+    })
+}
+
+fn mac_setting(ui: &mut egui::Ui, app: &App, uid: u64, st: &mut OptState, d: &'static Def) {
+    let cur = current(app, st, d);
+    let mut edit = None;
+    let width = ui.available_width();
+    ui.horizontal(|ui| {
+        let label = ui
+            .allocate_ui_with_layout(
+                egui::vec2(width * 0.54, 34.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_width(width * 0.54);
+                    ui.set_max_width(width * 0.54);
+                    ui.set_min_height(34.0);
+                    ui.add(egui::Label::new(d.label.trim_end_matches(':')).wrap())
+                },
+            )
+            .inner;
+        let control_w = ui.available_width().max(60.0);
+        ui.add_enabled_ui(true, |ui| {
+            ui.set_width(control_w);
+            match d.kind {
+                Kind::Bool(default) => {
+                    let value = cur.as_bool().unwrap_or(default);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (rect, response) =
+                            ui.allocate_exact_size(egui::vec2(32.0, 19.0), egui::Sense::click());
+                        let toggled = if response.clicked() {
+                            edit = Some(json!(!value));
+                            !value
+                        } else {
+                            value
+                        };
+                        let track = if toggled {
+                            app.theme.accent
+                        } else if app.theme.dark {
+                            egui::Color32::from_rgb(75, 76, 82)
+                        } else {
+                            egui::Color32::from_rgb(204, 208, 215)
+                        };
+                        ui.painter().rect_filled(rect, 10, track);
+                        let x = if toggled { rect.right() - 9.5 } else { rect.left() + 9.5 };
+                        ui.painter().circle_filled(
+                            egui::pos2(x, rect.center().y + 0.5),
+                            7.5,
+                            egui::Color32::from_black_alpha(18),
+                        );
+                        ui.painter().circle_filled(egui::pos2(x, rect.center().y), 7.0, egui::Color32::WHITE);
+                        if response.has_focus() {
+                            ui.painter().rect_stroke(
+                                rect.expand(2.0),
+                                11,
+                                egui::Stroke::new(1.0, app.theme.accent),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                        response.widget_info(|| {
+                            egui::WidgetInfo::selected(
+                                egui::WidgetType::Checkbox,
+                                ui.is_enabled(),
+                                toggled,
+                                d.label,
+                            )
+                        });
+                    });
+                }
+                Kind::Choice(default, _) if d.key == "general.theme" => {
+                    let value = cur.as_str().unwrap_or(default);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 3.0;
+                        let w = ((control_w - 6.0) / 3.0).max(36.0);
+                        for (id, name) in [("light", "Light"), ("dark", "Dark"), ("system", "Auto")] {
+                            let selected = value == id;
+                            let response = ui.add_sized([w, 29.0], egui::Button::selectable(selected, name));
+                            if response.clicked() {
+                                edit = Some(json!(id));
+                            }
+                        }
+                    });
+                }
+                Kind::Choice(default, choices) => {
+                    let value = cur.as_str().unwrap_or(default);
+                    let mut index = choices.iter().position(|(id, _)| *id == value).unwrap_or(0);
+                    let labels: Vec<_> = choices.iter().map(|(_, label)| *label).collect();
+                    if common::combo_idx(
+                        ui,
+                        ("mac-option", uid, d.key),
+                        &mut index,
+                        &labels,
+                        control_w.min(245.0),
+                    ) && let Some((value, _)) = choices.get(index)
+                    {
+                        edit = Some(json!(value));
+                    }
+                }
+                Kind::Int(default, min, max) => {
+                    let mut value = cur.as_i64().unwrap_or(default);
+                    if ui
+                        .add(egui::DragValue::new(&mut value).range(min..=max))
+                        .labelled_by(label.id)
+                        .changed()
+                    {
+                        edit = Some(json!(value));
+                    }
+                }
+                Kind::Text(default, max) => {
+                    let mut value = cur.as_str().unwrap_or(default).to_owned();
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut value)
+                                .desired_width(control_w)
+                                .margin(egui::Margin::symmetric(8, 6))
+                                .char_limit(max),
+                        )
+                        .labelled_by(label.id)
+                        .changed()
+                    {
+                        edit = Some(json!(value));
+                    }
+                }
+                Kind::Time(default) | Kind::TimeRange(default) => {
+                    let mut value = cur.as_str().unwrap_or(default).to_owned();
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut value)
+                                .desired_width(control_w)
+                                .margin(egui::Margin::symmetric(8, 6))
+                                .char_limit(16),
+                        )
+                        .labelled_by(label.id)
+                        .changed()
+                    {
+                        edit = Some(json!(value));
+                    }
+                }
+                _ => {}
+            }
+        });
+    });
+    if let Some(value) = edit {
+        st.edits.insert(d.key.into(), value);
+    }
+}
+
 /// Applies the edits; returns the settings that were refused.
 fn apply(ctx: &Context, app: &mut App, st: &OptState) -> Vec<String> {
     let mut errors = Vec::new();
@@ -351,6 +735,13 @@ fn page_ui(ui: &mut egui::Ui, app: &mut App, uid: u64, st: &mut OptState, pid: &
 }
 
 fn setting_ui(ui: &mut egui::Ui, app: &App, uid: u64, st: &mut OptState, d: &'static Def) {
+    if app.mac_style
+        && !TZ_KEYS.contains(&d.key)
+        && !matches!(d.kind, Kind::Days(_) | Kind::List(_) | Kind::Object(_))
+    {
+        mac_setting(ui, app, uid, st, d);
+        return;
+    }
     let cur = current(app, st, d);
     let mut edit: Option<Value> = None;
     match d.kind {
@@ -557,5 +948,28 @@ mod tests {
         assert_eq!(tz_label(-300), "(UTC-05:00) Eastern Time");
         assert_eq!(tz_label(345), "(UTC+05:45)");
         assert_eq!(tz_label(-30), "(UTC-00:30)");
+    }
+    #[test]
+    fn mac_settings_save_and_cancel_preserve_engine_behavior() {
+        let mut app = App::new(sample_session());
+        app.enable_mac_style();
+        app.run("options.open", json!({"page": "mail"})).unwrap();
+        let mut h = harness(app);
+        h.run_steps(2);
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Always show the Bcc box").click();
+        h.run_steps(2);
+        assert!(!h.state().s.settings.bool("mail.compose.showBcc"));
+        h.get_by_label("Save Changes").click();
+        h.run_steps(2);
+        assert!(h.state().s.settings.bool("mail.compose.showBcc"));
+        let mut app = h.into_state();
+        app.run("options.open", json!({"page": "mail"})).unwrap();
+        let mut h = harness(app);
+        h.run_steps(2);
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Always show the Bcc box").click();
+        h.run_steps(2);
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert!(h.state().s.settings.bool("mail.compose.showBcc"));
     }
 }

@@ -20,6 +20,7 @@ pub mod folders;
 pub mod icons;
 pub mod keys;
 pub mod list;
+pub mod mac;
 pub mod menus;
 pub mod modules;
 pub mod reading;
@@ -106,6 +107,8 @@ impl UiState {
 
 /// The application: session + UI state + theme + icons.
 pub struct App {
+    /// Compact, integrated Mac shell. The classic shell remains available to other front ends.
+    pub mac_style: bool,
     pub s: Session,
     pub ui: UiState,
     pub theme: theme::Theme,
@@ -277,7 +280,14 @@ pub fn ui_semibold() -> egui::FontFamily {
 impl App {
     pub fn new(s: Session) -> App {
         let theme = theme::Theme::for_dark(s.view.dark);
-        App { s, ui: UiState::default(), theme, icons: icons::Icons::default(), files: None }
+        App {
+            mac_style: false,
+            s,
+            ui: UiState::default(),
+            theme,
+            icons: icons::Icons::default(),
+            files: None,
+        }
     }
 
     /// Installs the platform's file dialogs.
@@ -396,7 +406,17 @@ impl App {
 
     /// Installs bundled fonts into egui (Inter for UI; all bundled faces as named families for message bodies).
     pub fn install_fonts(ctx: &egui::Context) {
-        ctx.set_fonts(font_definitions());
+        #[allow(unused_mut)] // Only macOS adds an installed system font.
+        let mut definitions = font_definitions();
+        // Read the installed system face on macOS; never bundle or redistribute Apple's fonts.
+        #[cfg(target_os = "macos")]
+        if let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFNS.ttf") {
+            definitions.font_data.insert("mac-system".into(), Arc::new(egui::FontData::from_owned(bytes)));
+            if let Some(faces) = definitions.families.get_mut(&egui::FontFamily::Proportional) {
+                faces.insert(0, "mac-system".into());
+            }
+        }
+        ctx.set_fonts(definitions);
     }
 
     /// Layout of the main window's last frame in `ctx`.
@@ -421,7 +441,11 @@ impl App {
 
     fn sync_theme(&mut self, ctx: &egui::Context) {
         if self.theme.dark != self.s.view.dark {
-            self.theme = theme::Theme::for_dark(self.s.view.dark);
+            self.theme = if self.mac_style {
+                theme::Theme::mac(self.s.view.dark)
+            } else {
+                theme::Theme::for_dark(self.s.view.dark)
+            };
         }
         let dark = self.theme.dark;
         if with_shell(ctx, |st| st.applied_dark) != Some(dark) {

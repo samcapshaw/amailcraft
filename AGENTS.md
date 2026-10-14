@@ -1,9 +1,9 @@
 # MailCraft: instructions for agents
 
-MailCraft is a clean-room, open-source, Rust-native desktop mail client modelled on the classic Outlook
-workflow: module rail, ribbon, folder pane, message list, reading pane, compose window, rules, quick steps,
-calendar, people, tasks and notes. It runs natively on Linux, Windows, macOS and FreeBSD, and on the web via
-WASM.
+MailCraft Mac is a Mac-focused fork of MonkeySaint/mailcraft. The Rust desktop app enables a Mac shell
+with a unified inbox and shared/delegated mailbox setup. The inherited engine, classic UI, CLI, and web
+host remain available. Read `README.md` and `docs/mac.md` for the fork's current behavior and limitations;
+upstream history and parity estimates are separated in `ROADMAP.md`.
 
 ## Start every session here
 1. Read `plan/STATUS.md` (current commit, what's next), then `plan/execution-plan.md` and
@@ -52,7 +52,7 @@ People trust a mail client with their mail; a crash can lose a draft. This outra
 | L3 | `render`, `net`, `formats`, `proof` (+ `search` later) | offscreen raster; protocols; file formats; spelling; search |
 | L4 | `engine` | Session, undo, **command registry**, Outlook feature catalog, sample mailbox |
 | L5 | `mcp` | MCP server |
-| L6 | `ui-egui` | Outlook-style egui front end |
+| L6 | `ui-egui` | Mac shell and inherited classic egui front end |
 | apps | `apps/mailcraft`, `apps/mailcraft-cli`, `apps/mailcraft-web` | binaries |
 | test support | `testmail` | local IMAP/SMTP test servers (127.0.0.1); dev-dependencies and apps only |
 

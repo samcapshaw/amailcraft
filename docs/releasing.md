@@ -1,9 +1,28 @@
-# Releasing MailCraft
+# Building and releasing MailCraft Mac
 
-Releases are built by GitHub Actions on GitHub-hosted runners (`.github/workflows/release.yml`) and
-published as a [GitHub release](https://github.com/MonkeySaint/mailcraft/releases) with every package and a
-`SHA256SUMS` file. Nothing needs registering: the workflows run as soon as they are on GitHub. Everything in
-this document can also be run by hand on a developer machine.
+The fork is [samcapshaw/amailcraft](https://github.com/samcapshaw/amailcraft). Inherited upstream tags
+and releases are not evidence of a published Mac edition. Signing and notarization have not been configured
+or verified for this fork.
+
+## Local Mac development bundle
+
+```sh
+./scripts/package-local-mac.sh
+```
+
+This builds `dist/MailCraft Mac.app` for the host architecture using the current source, the fork's
+icon, and bundle ID `dev.mailcraft.mac`. It is a development build without distribution signing or
+notarization. The default profile is `~/Library/Application Support/MailCraft Mac`.
+
+Before publishing, configure the fork's signing credentials, verify identifiers and update URLs,
+run the full quality gates, and test the resulting package. The local bundle helper does not produce
+a universal DMG or publish a GitHub release.
+
+## Inherited release pipeline
+
+The sections below describe the existing cross-platform packaging machinery. It still contains upstream
+application IDs, package names, and updater metadata; it must be adapted and tested before using it to
+distribute this fork. The README does not advertise upstream binaries as MailCraft Mac builds.
 
 ## Cutting a release
 
@@ -21,7 +40,7 @@ this document can also be run by hand on a developer machine.
    git tag -a v0.2.0 -m "MailCraft 0.2.0"
    ```
 
-4. Push the commit, then the tag to `origin` (`git@github.com:MonkeySaint/mailcraft.git`; pushing is the
+4. Push the commit, then the tag to `origin` (`git@github.com:samcapshaw/amailcraft.git`; pushing is the
    owner's call):
 
    ```sh
@@ -30,8 +49,8 @@ this document can also be run by hand on a developer machine.
    ```
 
 5. Watch the `release` workflow under the repository's
-   [Actions tab](https://github.com/MonkeySaint/mailcraft/actions). When it succeeds, the release appears
-   under [Releases](https://github.com/MonkeySaint/mailcraft/releases) with the notes generated from the
+   [Actions tab](https://github.com/samcapshaw/amailcraft/actions). When it succeeds, the release appears
+   under [Releases](https://github.com/samcapshaw/amailcraft/releases) with the notes generated from the
    commit subjects since the previous tag. Edit the notes there if needed. Re-running a failed `publish`
    job replaces the files of a release that already exists.
 

@@ -1,128 +1,127 @@
-<h1 align="center">MailCraft</h1>
+<h1 align="center">MailCraft Mac</h1>
 
 <p align="center">
-  <img src="assets/app-icon/hicolor/128x128/apps/mailcraft.png" alt="MailCraft app icon: a white envelope with a shaded flap on a teal tile" width="96">
+  <img src="assets/app-icon/hicolor/128x128/apps/mailcraft.png" alt="MailCraft Mac: a slate-blue envelope on a porcelain tile" width="96">
+</p>
+
+<p align="center"><b>A quieter Mac mail app, with room for all your mailboxes.</b></p>
+
+<p align="center">
+  A Mac-focused fork of <a href="https://github.com/MonkeySaint/mailcraft">MailCraft</a>.
+  A compact toolbar, a unified inbox, and a refined light and dark interface over a local-first Rust mail engine.
+  Built for personal mail alongside shared and delegated accounts.
 </p>
 
 <p align="center">
-  <b>A clean-room, open-source desktop mail client in pure Rust, modelled on the classic Outlook workflow.</b>
+  <a href="#a-look-inside">Screenshots</a> ·
+  <a href="#what-works-today">Features</a> ·
+  <a href="#shared-and-delegated-mailboxes">Shared mailboxes</a> ·
+  <a href="#run-on-your-mac">Run on your Mac</a> ·
+  <a href="#development">Development</a>
 </p>
 
-<p align="center">
-  Module rail, ribbon, folder pane, message list and reading pane, the way you already work: rules, quick
-  steps, conversations, search folders, calendar, people, tasks and notes. IMAP and SMTP accounts with
-  offline sync. Runs natively on Linux, Windows, macOS and FreeBSD, and in the browser via WebAssembly.
-</p>
+<img src="docs/images/mac-inbox.png" alt="MailCraft Mac unified inbox with personal, shared, and delegated mailboxes in the sidebar and a message open in the reading pane" width="100%">
 
-<p align="center">
-  <a href="#a-tour">A tour</a> ·
-  <a href="#what-works-today">What works today</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#for-agents-cli-and-mcp">For agents</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="#roadmap">Roadmap</a> ·
-  <a href="#license">License</a>
-</p>
+All Inboxes brings personal, shared, and delegated Inbox folders into one view. Screenshots show the current Mac interface with synthetic demo mail; no real accounts or messages are shown. These are offscreen app renders, so the operating system's window controls are not included.
 
-<p align="center">
-  <img src="docs/images/hero.png" alt="MailCraft main window: module rail, ribbon, Favorites and mailbox folders with unread counts, a date-grouped message list with unread and flagged messages, and a message open in the reading pane." width="100%">
-  <br><sub>The sample mailbox: folder pane with unread and [total] counts, date groups, unread bars, flags and categories, and the reading pane.</sub>
-</p>
+## A look inside
 
-## A tour
-
-| | |
+| Light and dark | Settings and accounts |
 |---|---|
-| <img src="docs/images/dark.png" alt="MailCraft in the dark theme" width="100%"> | <img src="docs/images/classic-ribbon.png" alt="The Classic ribbon with groups and large buttons" width="100%"> |
-| Dark theme | Classic ribbon (Simplified is the default) |
-| <img src="docs/images/calendar.png" alt="Calendar month view with a mini-month navigator" width="100%"> | <img src="docs/images/narrow.png" alt="A narrow window in single-pane mode" width="100%"> |
-| Calendar | Narrow windows: the folder pane minimises and the list and reading pane take turns |
+| <img src="docs/images/mac-dark.png" alt="The Mac unified inbox in dark mode" width="100%"> | <img src="docs/images/mac-settings.png" alt="Settings with an icon sidebar, grouped cards, aligned fields, and toggle switches" width="100%"> |
+| Muted accents, compact date markers, and a quiet toolbar. | Layered settings cards, refined controls, and consistent spacing. |
+| <img src="docs/images/mac-compose.png" alt="Compose window with a visible From identity and compact Send and Attach toolbar" width="100%"> | <img src="docs/images/mac-accounts.png" alt="Account settings with a mailbox list and separate account details" width="100%"> |
+| Sender identity stays visible; rich formatting is available when needed. | Personal and linked mailboxes in a dedicated account manager. |
 
-## Why MailCraft
+## What is different in this fork
 
-- **The workflow you know.** Behaviour, layout and feature names follow careful black-box observation of the
-  classic desktop client: default folder order, unread and total badges, date groups, RE:/FW: handling, the
-  quoted header on replies, the Rules Wizard, ribbon degradation as the window narrows.
-- **Yours.** Open source (MIT OR Apache-2.0), local-first storage, standard protocols (IMAP, SMTP, JMAP) and
-  standard files (EML, MBOX, MSG, iCalendar, vCard, CSV). No telemetry.
-- **Agent-drivable.** Every action is a named command. The CLI, the JSON control channel and the MCP server
-  drive the same commands the ribbon does.
-- **Never crash.** No panics in non-test code, hostile-input fuzzing over every command, size caps on every
-  parser.
+- **Mac comes first.** The desktop app opens the Mac shell: unified title bar, compact actions, softer icons, and system font loading on macOS. The UI is built with Rust and egui; it is not a SwiftUI app.
+- **One combined inbox.** All Inboxes aggregates Inbox folders and unread counts. Search stays within those inboxes, and message actions keep the source mailbox identity.
+- **Space for shared work.** Shared and delegated mailboxes have distinct sidebar labels, their own authorization, and explicit sending permissions in the client.
+- **More considered details.** A refined search field, compact Focused/Other controls, lighter date groups, a new original envelope icon, and redesigned settings and account layouts.
+
+The underlying mail engine, CLI, and MCP integration come from upstream. This fork changes the desktop experience and adds unified-inbox and linked-mailbox behavior. The web front end and default headless UI retain the classic shell.
 
 ## What works today
 
-Status: **pre-alpha**. See [ROADMAP.md](ROADMAP.md) for honest per-area estimates and
-[docs/parity.md](docs/parity.md) for the feature catalog. Account types, push, POP3, JMAP, OAuth sign-in and
-where passwords are kept: [docs/accounts.md](docs/accounts.md).
+**Pre-alpha.** The Mac interface and linked-account implementation are under active development.
 
-- **Mail:** read, reply, reply all, forward (inline or in a window), drafts, delete/archive/move/copy,
-  flags, categories, importance, Focused/Other, arrange by 13 keys, filters, conversations, search with a
-  query language, search folders.
-- **Compose:** rich text, spelling with suggestions, signatures, address auto-complete, attachments.
-- **Accounts:** IMAP + SMTP with background sync, an offline queue, Outbox → Sent, Send/Receive.
-- **Organise:** rules (Rules Wizard, run on arrival or on demand), quick steps, colour categories.
-- **Calendar, People, To Do, Notes:** views, editors, meeting requests over iCalendar, reminders.
-- **Files:** import and export EML, MBOX, MSG, ICS, VCF, CSV; print and PDF.
+| Area | Available now |
+|---|---|
+| Inbox | Combined Inbox folders, per-account folders, unread counts, Focused/Other, date grouping, sorting, filtering, and search |
+| Mail | Reading pane, replies, forwarding, drafts, archive, delete, move/copy, flags, categories, and conversations |
+| Compose | Visible From identity, compact actions, rich text, spelling, signatures, address completion, and attachments |
+| Accounts | Existing IMAP/SMTP, POP3, JMAP, OAuth flows, local storage, and background sync; shared/delegated OAuth IMAP setup |
+| Settings | Category navigation, grouped forms, appearance selection, Save/Cancel, and a separate account manager |
+| Other tools | Existing rules, quick steps, calendar, people, tasks, notes, import/export, print/PDF, CLI, and MCP |
 
-## Quick start
+See [Mac setup and limitations](docs/mac.md), [account documentation](docs/accounts.md), and the [fork roadmap](ROADMAP.md). The inherited [feature catalog](docs/parity.md) measures command coverage, not complete Outlook compatibility.
 
-Packages for Linux, Windows, macOS, FreeBSD and the web are published on the
-[releases page](https://github.com/MonkeySaint/mailcraft/releases) (see [docs/releasing.md](docs/releasing.md)).
-To build from source:
+## Shared and delegated mailboxes
 
-```sh
-git clone https://github.com/MonkeySaint/mailcraft.git && cd mailcraft
+Linked Microsoft 365 mailboxes currently use **OAuth IMAP/SMTP**. Each mailbox signs in separately as the delegate using a configured public-client app registration. Receive-only is the default; Send As is opt-in and requires server-side permission. A receive-only mailbox cannot silently send through your personal account.
 
-# Desktop app with the built-in sample mailbox
-cargo run --release -p mailcraft -- --sample
+This has been tested with synthetic/local fixtures, **not a real Microsoft 365 tenant**. Graph/EWS, automatic mailbox discovery, permission administration, Send on Behalf, and shared Exchange calendars are not implemented. Organizations that disable IMAP/SMTP need a different transport. This is not yet a replacement for all Outlook account capabilities.
 
-# Your own local profile (data in ~/.local/share/MailCraft by default)
-cargo run --release -p mailcraft
+Follow the [linked-mailbox setup guide](docs/mac.md#shared-and-delegated-microsoft-365-mailboxes) for the exact flow and limits.
 
-# Local test mail servers for trying accounts without a real mailbox
-cargo run -p mailcraft-testmail-app -- --help
-```
+## Run on your Mac
 
-Web build: see [apps/mailcraft-web/README.md](apps/mailcraft-web/README.md).
-
-## For agents: CLI and MCP
+Install a Rust toolchain compatible with the workspace, then:
 
 ```sh
-mailcraft-cli commands                 # every command id, label, location, shortcut
-mailcraft-cli parity                   # catalog coverage summary
-mailcraft-cli run --sample --cmd 'mail.reply' --query list
-mailcraft-cli mcp --sample             # MCP server over stdio (see docs/mcp.md)
+git clone https://github.com/samcapshaw/amailcraft.git
+cd amailcraft
+
+# In-memory demo with personal, shared, and delegated sample mail
+./scripts/run-mac.sh --sample
+
+# Persistent local profile
+./scripts/run-mac.sh
+
+# Build a local development app bundle
+./scripts/package-local-mac.sh
 ```
 
-A running app can be driven over a local JSON control channel (`--control-port N`, see
-[docs/control-protocol.md](docs/control-protocol.md)); `mailcraft-cli mcp --connect 127.0.0.1:N` bridges MCP to it.
+The bundle is created at `dist/MailCraft Mac.app`. It is a local development build for the build machine's architecture, without distribution signing or notarization. No signed Mac release is promised by the inherited upstream tags.
 
-## Architecture
+The default Mac profile is `~/Library/Application Support/MailCraft Mac`; `--profile PATH` opens a separate profile. The bundle identifier is `dev.mailcraft.mac`. Demo accounts cannot connect or send. OAuth requires your own provider app registration; see [account setup](docs/accounts.md).
 
-| Layer | Crates | Job |
+## Development
+
+User-visible actions dispatch through the engine's command registry. The Mac shell lives in `crates/ui-egui/src/mac.rs`; the desktop host enables it with `App::enable_mac_style()`.
+
+```sh
+mkdir -p target/tmp
+export TMPDIR="$PWD/target/tmp"
+export CARGO_BUILD_JOBS=4
+
+cargo test -p mailcraft-engine -p mailcraft-ui-egui --lib
+cargo clippy -p mailcraft -p mailcraft-ui-egui -p mailcraft-engine --all-targets -- -D warnings
+cargo xtask ci
+
+# Refresh the README screenshots from the synthetic Mac demo
+./scripts/screenshots-mac.sh
+```
+
+| Layer | Crates | Responsibility |
 |---|---|---|
-| L0 | `geom`, `mime` | units and colours; RFC 5322 and MIME parse/build |
-| L1 | `model`, `fonts` | mailbox model, rich text, dates; bundled open fonts |
-| L2 | `store`, `html`, `layout` | local storage; HTML sanitising ↔ rich text; body layout |
-| L3 | `render`, `net`, `formats`, `proof`, `search` | rasteriser and PDF; IMAP/SMTP/JMAP/OAuth2; file formats; spelling; search |
-| L4 | `engine` | session, undo, command registry, feature catalog, sync |
-| L5 | `mcp` | MCP server |
-| L6 | `ui-egui` | the Outlook-style user interface |
-| apps | `mailcraft`, `mailcraft-cli`, `mailcraft-web`, `mailcraft-testmail-app` | binaries |
+| Model and content | `geom`, `mime`, `model`, `fonts` | Mail data, MIME, geometry, and bundled open fonts |
+| Storage and rendering | `store`, `html`, `layout`, `render` | Local persistence, sanitizing, layout, and raster/PDF output |
+| Services | `net`, `formats`, `proof`, `search` | Protocols, file formats, spelling, and indexed search |
+| Application | `engine` | Commands, account routing, sync, session, and undo |
+| Interfaces | `ui-egui`, `mcp`, desktop/CLI/web apps | Mac desktop shell, classic host UI, automation, and entry points |
 
-`cargo xtask ci` runs fmt, clippy, tests, the layer check, asset attribution, the licence allowlist, the parity
-floor and the wasm build. CI runs on GitHub Actions (`.github/workflows/`).
+Apple fonts are loaded from the installed operating system and are not redistributed. The app icon is original vector artwork. Use synthetic mail and local test servers for development.
 
-## Roadmap
+Automation: [CLI and MCP](docs/mcp.md) · [Local control channel](docs/control-protocol.md).
+Distribution: [Build and release notes](docs/releasing.md).
+Contributions: [pull requests for this fork](https://github.com/samcapshaw/amailcraft/pulls).
 
-[ROADMAP.md](ROADMAP.md) lists milestones, honest parity per area and what needs the project owner. Bugs and
-ideas go to the [issue tracker](https://github.com/MonkeySaint/mailcraft/issues).
+## Upstream and license
 
-## License
+This fork is based on [MonkeySaint/mailcraft](https://github.com/MonkeySaint/mailcraft). Credit for the Rust mail engine, original application, and inherited tools belongs to the upstream contributors. Historical upstream milestones remain documented in the [roadmap](ROADMAP.md#upstream-history).
 
-MIT OR Apache-2.0, at your option ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)). Bundled fonts
-are under the SIL Open Font License; see [NOTICE](NOTICE) and [ATTRIBUTION.md](ATTRIBUTION.md).
+MIT OR Apache-2.0 ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)). Third-party notices and asset credits are preserved in [NOTICE](NOTICE) and [ATTRIBUTION.md](ATTRIBUTION.md).
 
-MailCraft is an independent project, not affiliated with or endorsed by Microsoft. Outlook is a trademark of
-Microsoft Corporation, used here only to describe the workflow MailCraft is modelled on.
+MailCraft Mac is independent and is not affiliated with or endorsed by Apple or Microsoft. Outlook is a Microsoft trademark, referenced only to describe compatibility goals.

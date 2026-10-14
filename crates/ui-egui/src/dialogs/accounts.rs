@@ -29,6 +29,7 @@ use mailcraft_model::{Account, AccountId, AccountKind, Security};
 
 pub(crate) fn show(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Option<Out> {
     Some(match d.name {
+        "addSharedMailbox" => shared_mailbox(ctx, app, d),
         "accountSettings" => account_settings(ctx, app, d),
         "addAccount" => wizard(ctx, app, d),
         "testAccount" => test_account(ctx, app, d),
@@ -101,6 +102,9 @@ struct SettingsState {
 const SETTINGS_TABS: [&str; 5] = ["Email", "Data Files", "RSS Feeds", "Internet Calendars", "Address Books"];
 
 fn account_settings(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
+    if app.mac_style && !d.bool("advanced") {
+        return mac_accounts(ctx, app, d);
+    }
     let first = d
         .get("account")
         .and_then(|a| a.get("id").or(Some(a)))
@@ -145,6 +149,181 @@ fn account_settings(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
     })
 }
 
+fn mac_accounts(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
+    with_state(
+        ctx,
+        app,
+        d.uid,
+        |app| SettingsState { email: app.s.mailbox.accounts.first().map(|a| a.id.0), ..Default::default() },
+        |st, app| {
+            window(ctx, app, d, "Accounts", 790.0, |ui, app| {
+                let accounts = app.s.mailbox.accounts.clone();
+                if !accounts.iter().any(|a| Some(a.id.0) == st.email) {
+                    st.email = accounts.first().map(|a| a.id.0);
+                }
+                let mut out = Out::Keep;
+                ui.add_space(12.0);
+                ui.horizontal_top(|ui| {
+                    egui::Frame::new().fill(app.theme.chrome).corner_radius(9).inner_margin(12).show(
+                        ui,
+                        |ui| {
+                            ui.vertical(|ui| {
+                                ui.set_width(200.0);
+                                ui.set_min_height(330.0);
+                                ui.label(
+                                    RichText::new("YOUR MAILBOXES").size(10.0).color(app.theme.text_muted),
+                                );
+                                ui.add_space(10.0);
+                                for a in &accounts {
+                                    let name =
+                                        if a.display_name.is_empty() { &a.address } else { &a.display_name };
+                                    if ui
+                                        .add_sized(
+                                            [200.0, 36.0],
+                                            egui::Button::selectable(st.email == Some(a.id.0), name),
+                                        )
+                                        .clicked()
+                                    {
+                                        st.email = Some(a.id.0);
+                                        st.error.clear();
+                                    }
+                                }
+                            });
+                        },
+                    );
+                    ui.add_space(18.0);
+                    ui.vertical(|ui| {
+                        ui.set_width((ui.available_width() - 8.0).max(240.0));
+                        if let Some(a) = accounts.iter().find(|a| Some(a.id.0) == st.email) {
+                            let title = if a.display_name.is_empty() { &a.address } else { &a.display_name };
+                            ui.label(RichText::new(title).size(23.0));
+                            ui.label(RichText::new(&a.address).size(12.0).color(app.theme.text_muted));
+                            ui.add_space(20.0);
+                            egui::Frame::new()
+                                .fill(app.theme.group_header)
+                                .stroke(egui::Stroke::new(0.5, app.theme.separator))
+                                .corner_radius(8)
+                                .inner_margin(16)
+                                .show(ui, |ui| {
+                                    ui.vertical(|ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.spacing_mut().item_spacing.y = 12.0;
+                                    let kind =
+                                        a.linked_mailbox
+                                            .as_ref()
+                                            .map(|l| {
+                                                if l.delegated {
+                                                    "Delegated mailbox"
+                                                } else {
+                                                    "Shared mailbox"
+                                                }
+                                            })
+                                            .unwrap_or(account_type(app, a));
+                                    ui.label(RichText::new(kind).strong());
+                                    if let Some(link) = &a.linked_mailbox {
+                                        ui.label(format!("Sign in as {}", link.principal_address));
+                                        muted(
+                                            ui,
+                                            app,
+                                            if link.send_as {
+                                                "Sending as this mailbox is enabled."
+                                            } else {
+                                                "Receive only. Sending as this mailbox is disabled."
+                                            },
+                                        );
+                                    }
+                                    if a.is_default {
+                                        muted(ui, app, "Default account for new messages.");
+                                    }
+                                    if a.kind == AccountKind::Local {
+                                        muted(
+                                            ui,
+                                            app,
+                                            "Stored locally. This mailbox does not connect to a mail server.",
+                                        );
+                                    } else {
+                                        muted(
+                                            ui,
+                                            app,
+                                            if a.credential
+                                                == mailcraft_model::account::CredentialKind::OAuthToken
+                                            {
+                                                "Authentication: OAuth 2.0"
+                                            } else {
+                                                "Authentication: password"
+                                            },
+                                        );
+                                    }
+                                });
+                                });
+                            ui.add_space(18.0);
+                            ui.horizontal_wrapped(|ui| {
+                                if ui
+                                    .add_enabled(is_email(a), egui::Button::new("Connection settings…"))
+                                    .clicked()
+                                {
+                                    out = Out::open("addAccount", json!({"change": a.id.0}));
+                                }
+                                if ui.add_enabled(is_email(a), egui::Button::new("Test connection")).clicked()
+                                {
+                                    out = Out::open("testAccount", json!({"account": a.id.0}));
+                                }
+                            });
+                            ui.add_space(8.0);
+                            ui.horizontal_wrapped(|ui| {
+                                if ui
+                                    .add_enabled(
+                                        !a.is_default && a.can_send(),
+                                        egui::Button::new("Make default"),
+                                    )
+                                    .clicked()
+                                {
+                                    st.error =
+                                        try_run(app, "accounts.setDefault", json!({"account": a.id.0}))
+                                            .err()
+                                            .unwrap_or_default();
+                                }
+                                if ui.add_enabled(is_email(a), egui::Button::new("Remove account…")).clicked()
+                                {
+                                    app.run("accounts.remove", json!({"account": a.id.0}));
+                                }
+                            });
+                            ui.add_space(24.0);
+                            if ui.link("Data files and advanced account options…").clicked() {
+                                out = Out::open(
+                                    "accountSettings",
+                                    json!({"advanced": true, "account": a.id.0}),
+                                );
+                            }
+                        } else {
+                            ui.label("Add an account to get started.");
+                        }
+                    });
+                });
+                if !st.error.is_empty() {
+                    ui.colored_label(app.theme.danger, &st.error);
+                }
+                ui.add_space(16.0);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Add account…").clicked() {
+                        out = Out::open("addAccount", json!({}));
+                    }
+                    if ui.button("Add shared mailbox…").clicked() {
+                        out = Out::open("addSharedMailbox", json!({}));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Done").clicked() {
+                            out = Out::Close;
+                        }
+                    });
+                });
+                out
+            })
+        },
+    )
+}
+
 fn email_tab(ui: &mut Ui, app: &mut App, st: &mut SettingsState) -> Out {
     muted(ui, app, "You can add or remove an account. You can select an account and change its settings.");
     let accounts: Vec<Account> = app.s.mailbox.accounts.iter().filter(|a| is_email(a)).cloned().collect();
@@ -156,6 +335,9 @@ fn email_tab(ui: &mut Ui, app: &mut App, st: &mut SettingsState) -> Out {
     ui.horizontal(|ui| {
         if ui.button("New...").clicked() {
             out = Out::open("addAccount", json!({}));
+        }
+        if ui.button("Shared mailbox…").clicked() {
+            out = Out::open("addSharedMailbox", json!({}));
         }
         if ui.add_enabled(sel.is_some(), egui::Button::new("Repair...")).clicked()
             && let Some(a) = &sel
@@ -191,6 +373,13 @@ fn email_tab(ui: &mut Ui, app: &mut App, st: &mut SettingsState) -> Out {
                     st.email = Some(a.id.0);
                 }
                 let mut kind = account_type(app, a).to_owned();
+                if let Some(link) = &a.linked_mailbox {
+                    kind = format!(
+                        "{} · {}",
+                        if link.delegated { "Delegated" } else { "Shared" },
+                        if link.send_as { "Send as" } else { "Receive only" }
+                    );
+                }
                 if a.is_default {
                     kind.push_str(" (send from this account by default)");
                 }
@@ -425,6 +614,7 @@ struct Wizard {
     jmap: bool,
     /// Incoming mail over POP3.
     pop3: bool,
+    receive_only: bool,
     extra: Extra,
     name: String,
     address: String,
@@ -605,6 +795,7 @@ impl Wizard {
     /// Fills the fields from an account (Change Account). Passwords are never read back, only whether one
     /// is saved.
     fn fill_from(&mut self, app: &App, a: &Account) {
+        self.receive_only = a.linked_mailbox.as_ref().is_some_and(|l| !l.send_as);
         self.jmap = a.kind == AccountKind::Jmap;
         self.pop3 = mailcraft_engine::accounts::kind_label(&app.s, a) == "pop3";
         self.extra = Extra::from_options(&mailcraft_engine::accounts::account_options(&app.s, a.id));
@@ -648,7 +839,7 @@ impl Wizard {
     fn settings_ok(&self) -> bool {
         self.address_ok()
             && !self.in_host.trim().is_empty()
-            && (self.jmap || !self.out_host.trim().is_empty())
+            && (self.jmap || self.receive_only || !self.out_host.trim().is_empty())
             && (self.change.is_some()
                 || self.created.is_some()
                 || !self.password.is_empty()
@@ -699,7 +890,9 @@ impl Wizard {
         if !self.account_name.trim().is_empty() {
             o.insert("displayName".into(), json!(self.account_name.trim()));
         }
-        if !self.jmap {
+        if self.receive_only {
+            o.insert("outgoing".into(), Value::Null);
+        } else if !self.jmap {
             let out_user = if self.out_separate && !self.out_user.trim().is_empty() {
                 self.out_user.trim()
             } else {
@@ -759,6 +952,9 @@ fn wizard(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
             w.change = Some(a.id.0);
             w.page = PAGE_SETTINGS;
             w.fill_from(app, &a);
+        }
+        if change.and_then(|id| account_of(app, id)).is_some_and(|a| a.linked_mailbox.is_some()) {
+            w.extra.oauth_open = true;
         }
         if w.name.is_empty() {
             // Your name: the Options user name, else the sender name of an existing mail account (never a
@@ -996,7 +1192,7 @@ fn page_settings(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Out {
             };
             grid_edit(ui, "Password:", &mut st.password, hint, true);
         });
-        if !st.jmap {
+        if !st.jmap && !st.receive_only {
             common::heading(ui, app, "Outgoing mail (SMTP)");
             egui::Grid::new(("mc-wiz-out", uid)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
                 grid_edit(ui, "Outgoing server:", &mut st.out_host, "smtp.example.com", false);
@@ -1117,6 +1313,9 @@ fn more_settings(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) {
 /// Sign in with OAuth 2.0: provider, the user's client id, device code or browser. Returns a page to open.
 fn oauth_section(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Option<String> {
     let mut open_url = None;
+    if let Some(link) = st.change.and_then(|id| account_of(app, id)).and_then(|a| a.linked_mailbox) {
+        ui.label(format!("Sign in as {} to open this mailbox.", link.principal_address));
+    }
     let r = egui::CollapsingHeader::new("Sign in with OAuth 2.0 instead of a password")
         .id_salt(("mc-wiz-oauth", uid))
         .open(if st.extra.oauth_open { Some(true) } else { None })
@@ -1138,12 +1337,15 @@ fn oauth_section(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Optio
                 if v.is_empty() {
                     v.push((String::new(), "(none available)".into(), false));
                 }
-                // The provider serving the address first.
+                // Restore the configured provider before guessing from the mailbox's domain.
+                let saved_provider = st.change.and_then(|id| account_of(app, id))
+                    .and_then(|a| mailcraft_engine::accounts::account_options(&app.s, a.id).oauth)
+                    .map(|b| b.provider);
                 let domain = st.domain();
-                if let Some(i) = v.iter().position(|(id, _, _)| {
+                if let Some(i) = v.iter().position(|(id, _, _)| Some(id) == saved_provider.as_ref()).or_else(|| v.iter().position(|(id, _, _)| {
                     (id == "google" && (domain == "gmail.com" || domain == "googlemail.com"))
                         || (id == "microsoft" && ["outlook.com", "hotmail.com", "live.com", "msn.com"].contains(&domain.as_str()))
-                }) {
+                })) {
                     st.extra.provider = i;
                 }
                 st.extra.providers = v;
@@ -1613,4 +1815,153 @@ fn progress(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
             })
         },
     )
+}
+
+#[derive(Clone, Default)]
+struct SharedMailboxForm {
+    owner: Option<u32>,
+    address: String,
+    name: String,
+    delegated: bool,
+    send_as: bool,
+    error: String,
+}
+
+fn shared_mailbox(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
+    with_state(
+        ctx,
+        app,
+        d.uid,
+        |app| SharedMailboxForm {
+            owner: app
+                .s
+                .mailbox
+                .accounts
+                .iter()
+                .find(|a| {
+                    a.kind == AccountKind::Imap
+                        && a.credential == mailcraft_model::account::CredentialKind::OAuthToken
+                        && a.linked_mailbox.is_none()
+                })
+                .map(|a| a.id.0),
+            ..Default::default()
+        },
+        |st, app| {
+            window(ctx, app, d, "Add a mailbox", 470.0, |ui, app| {
+                heading(ui, app, "Your team's mail. In one place.");
+                muted(
+                    ui,
+                    app,
+                    "Open a shared mailbox or a colleague's delegated mailbox using your own sign-in.",
+                );
+                ui.add_space(12.0);
+                let accounts: Vec<_> = app
+                    .s
+                    .mailbox
+                    .accounts
+                    .iter()
+                    .filter(|a| {
+                        a.kind == AccountKind::Imap
+                            && a.credential == mailcraft_model::account::CredentialKind::OAuthToken
+                            && a.linked_mailbox.is_none()
+                    })
+                    .map(|a| (a.id.0, a.address.clone()))
+                    .collect();
+                ui.label("Sign in using");
+                let selected = accounts
+                    .iter()
+                    .find(|(id, _)| Some(*id) == st.owner)
+                    .map(|(_, a)| a.as_str())
+                    .unwrap_or("Choose an OAuth account");
+                egui::ComboBox::from_id_salt("shared-principal").selected_text(selected).show_ui(ui, |ui| {
+                    for (id, address) in &accounts {
+                        ui.selectable_value(&mut st.owner, Some(*id), address);
+                    }
+                });
+                if accounts.is_empty() {
+                    muted(ui, app, "Add your personal Microsoft 365 IMAP account and configure OAuth first.");
+                }
+                ui.add_space(12.0);
+                let label = ui.label("Mailbox address");
+                ui.add(
+                    egui::TextEdit::singleline(&mut st.address)
+                        .hint_text("team@example.com")
+                        .desired_width(f32::INFINITY),
+                )
+                .labelled_by(label.id);
+                let label = ui.label("Display name");
+                ui.add(
+                    egui::TextEdit::singleline(&mut st.name)
+                        .hint_text("Team inbox")
+                        .desired_width(f32::INFINITY),
+                )
+                .labelled_by(label.id);
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut st.delegated, false, "Shared mailbox");
+                    ui.selectable_value(&mut st.delegated, true, "Delegated mailbox");
+                });
+                ui.checkbox(&mut st.send_as, "Send as this mailbox");
+                muted(
+                    ui,
+                    app,
+                    "Your administrator must have granted mailbox access and, if selected, Send As. This setup does not grant permissions. IMAP and SMTP must be enabled by your organization.",
+                );
+                ui.add_space(8.0);
+                muted(
+                    ui,
+                    app,
+                    "Next: sign in as yourself in the account's OAuth section. Each mailbox keeps its own authorization; no passwords or tokens are copied.",
+                );
+                if !st.error.is_empty() {
+                    ui.colored_label(app.theme.danger, &st.error);
+                }
+                ui.add_space(12.0);
+                let mut out = Out::Keep;
+                ui.horizontal(|ui| {
+            if ui.add_enabled(st.owner.is_some() && !st.address.trim().is_empty(), egui::Button::new("Add mailbox")).clicked() {
+                let name = if st.name.trim().is_empty() { st.address.clone() } else { st.name.clone() };
+                match try_run(app, "accounts.addShared", json!({"account": st.owner, "address": st.address.trim(), "displayName": name, "delegated": st.delegated, "sendAs": st.send_as})) {
+                    Ok(v) => { if let Some(id) = v.get("account").and_then(Value::as_u64) { out = Out::close_open("addAccount", json!({"change": id})); } }
+                    Err(e) => st.error = e,
+                }
+            }
+            if ui.button("Cancel").clicked() { out = Out::Close; }
+        });
+                out
+            })
+        },
+    )
+}
+
+#[cfg(test)]
+mod shared_wizard_tests {
+    use super::*;
+    #[test]
+    fn receive_only_setup_can_save_without_smtp() {
+        let mut app = App::new(mailcraft_engine::sample::sample_session());
+        let id = app.s.mailbox.add_account(Account {
+            kind: AccountKind::Imap,
+            address: "team@example.net".into(),
+            incoming: Some(mailcraft_model::ServerSettings {
+                host: "imap.example.net".into(),
+                port: 993,
+                username: "team@example.net".into(),
+                ..Default::default()
+            }),
+            credential: mailcraft_model::account::CredentialKind::OAuthToken,
+            linked_mailbox: Some(mailcraft_model::account::LinkedMailbox {
+                principal_address: "delegate@example.net".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let a = app.s.mailbox.account(id).unwrap().clone();
+        let mut wizard = Wizard { change: Some(id.0), ..Default::default() };
+        wizard.fill_from(&app, &a);
+        assert!(wizard.settings_ok());
+        assert_eq!(wizard.params(Some(id.0))["outgoing"], Value::Null);
+        assert!(wizard.save(&mut app).is_ok());
+        assert!(app.s.mailbox.account(id).unwrap().outgoing.is_none());
+    }
 }

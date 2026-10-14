@@ -1228,3 +1228,19 @@ fn paste_defaults_follow_where_the_text_was_copied() {
     });
     assert!(!bold, "kept text only: {:?}", c.body);
 }
+
+#[test]
+fn mac_compose_shows_sender_and_keeps_advanced_formatting_optional() {
+    let (mut app, cid) = app_with_compose(true);
+    app.enable_mac_style();
+    let mut h = inline_harness(app, cid);
+    h.run();
+    assert!(h.query_by_role_and_label(Role::TextInput, "From").is_some());
+    assert!(h.query_by_label("Send").is_some());
+    assert!(h.query_by_label("Formatting").is_some());
+    h.get_by_role_and_label(Role::TextInput, "Subject").click();
+    h.run();
+    h.get_by_role_and_label(Role::TextInput, "Subject").type_text("A clearer compose window");
+    h.run();
+    assert_eq!(compose(&h, cid).subject, "A clearer compose window");
+}

@@ -1,8 +1,15 @@
 # Mail accounts
 
 MailCraft talks to mail servers over open protocols only: IMAP and POP3 for incoming mail, SMTP for sending,
-and JMAP for both. Exchange (EWS) is not supported. Accounts are added with **File › Add Account** (or
-`accounts.add`); try them against the local test servers (`mailcraft-testmail`) rather than a real mailbox.
+and JMAP for both. Exchange (EWS) is not supported. In the Mac shell, open **More → Accounts** or **Manage accounts…** in the sidebar, then **Add account**.
+The classic shell also offers **File → Add Account**; both use `accounts.add`. For development, use
+the local test servers (`mailcraft-testmail`) and synthetic mail.
+
+## Shared and delegated mailboxes (Mac edition)
+
+`accounts.addShared` creates an OAuth IMAP mailbox using an existing personal OAuth account's server
+configuration and app registration. Each mailbox signs in separately as the delegate; no credentials
+are copied. See [Mac setup and limits](mac.md#shared-and-delegated-microsoft-365-mailboxes).
 
 ## Finding the server settings
 

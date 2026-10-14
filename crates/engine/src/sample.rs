@@ -661,6 +661,37 @@ fn add_notes(mb: &mut Mailbox, account: AccountId, day_start: i64) {
     }
 }
 
+/// Desktop design demo: synthetic shared and delegated mailboxes, all local and incapable of sending.
+pub fn mac_sample_mailbox(now: DateTime) -> Mailbox {
+    let mut mb = sample_mailbox(now);
+    let originals: Vec<_> = mb.mail.values().filter(|m| !m.is_draft).take(3).cloned().collect();
+    for (name, address, delegated) in
+        [("Design team", "design@example.net", false), ("Alex Morgan", "alex@example.net", true)]
+    {
+        let account = mb.add_account(mailcraft_model::Account {
+            display_name: name.into(),
+            address: address.into(),
+            linked_mailbox: Some(mailcraft_model::account::LinkedMailbox {
+                principal_address: SAMPLE_USER_ADDR.into(),
+                delegated,
+                send_as: false,
+            }),
+            ..Default::default()
+        });
+        mb.create_default_folders(account);
+        if let Some(inbox) = mb.role_folder(account, FolderRole::Inbox) {
+            for original in &originals {
+                let mut item = original.clone();
+                item.folder = inbox;
+                item.read = false;
+                item.to = vec![mailcraft_model::Address::new(Some(name), address)];
+                mb.add_mail(item);
+            }
+        }
+    }
+    mb
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -58,6 +58,8 @@ pub struct ViewState {
     pub dark: bool,
     /// Focused Inbox: true = Focused tab, false = Other tab.
     pub focused_tab: bool,
+    /// Aggregate only Inbox folders across accounts; selection.folder remains the view-settings anchor.
+    pub unified_inbox: bool,
     /// Active search query (empty = none) and its scope.
     pub search: String,
     pub search_scope: SearchScope,
@@ -108,6 +110,7 @@ impl Default for ViewState {
             zoom: 100,
             dark: false,
             focused_tab: true,
+            unified_inbox: false,
             search: String::new(),
             search_scope: SearchScope::CurrentFolder,
             collapsed_groups: BTreeMap::new(),

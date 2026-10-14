@@ -160,6 +160,38 @@ impl Theme {
         });
     }
 
+    /// Quiet neutral surfaces, system blue, and restrained separators.
+    pub fn mac(dark: bool) -> Theme {
+        let mut t = Self::for_dark(dark);
+        t.accent = if dark { Color32::from_rgb(105, 159, 220) } else { Color32::from_rgb(57, 124, 204) };
+        t.unread = t.accent;
+        t.link = t.accent;
+        if dark {
+            t.chrome = Color32::from_rgb(38, 38, 40);
+            t.chrome_text = t.text;
+            t.backdrop = Color32::from_rgb(30, 30, 32);
+            t.pane = t.backdrop;
+            t.reading = Color32::from_rgb(35, 35, 37);
+            t.ribbon = t.chrome;
+            t.separator = Color32::from_rgb(55, 55, 58);
+            t.selected = Color32::from_rgb(48, 60, 75);
+            t.selected_folder = t.selected;
+        } else {
+            t.chrome = Color32::from_rgb(242, 242, 244);
+            t.chrome_text = t.text;
+            t.backdrop = Color32::WHITE;
+            t.ribbon = t.chrome;
+            t.text = Color32::from_rgb(36, 36, 38);
+            t.text_muted = Color32::from_rgb(128, 128, 134);
+            t.separator = Color32::from_rgb(226, 226, 230);
+            t.selected = Color32::from_rgb(226, 238, 252);
+            t.selected_folder = Color32::from_rgb(215, 227, 243);
+            t.hover = Color32::from_rgb(235, 235, 239);
+            t.group_header = Color32::from_rgb(250, 250, 251);
+        }
+        t
+    }
+
     pub fn light() -> Theme {
         Theme {
             dark: false,

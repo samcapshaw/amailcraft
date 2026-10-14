@@ -195,6 +195,7 @@ pub const KNOWN: &[&str] = &[
     "contactSupport",
     "accountSettings",
     "addAccount",
+    "addSharedMailbox",
     "testAccount",
     "confirmRemoveAccount",
     "mailboxCleanup",

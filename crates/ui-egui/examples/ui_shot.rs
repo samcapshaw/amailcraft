@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run -p mailcraft-ui-egui --example ui_shot -- <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME]
-//!     [--reading right|bottom|off] [--select] [--classic] [--scale F]
+//!     [--reading right|bottom|off] [--select] [--classic] [--mac] [--shared] [--compose] [--settings] [--accounts] [--scale F]
 //! ```
 //!
 //! Defaults: 1920x1040, light theme, Mail module, nothing selected, scale 1. `--module` takes mail, calendar,
@@ -26,6 +26,11 @@ struct Opts {
     h: f32,
     dark: bool,
     classic: bool,
+    mac: bool,
+    shared: bool,
+    compose: bool,
+    settings: bool,
+    accounts: bool,
     module: Option<String>,
     reading: Option<String>,
     select: bool,
@@ -40,6 +45,11 @@ fn parse() -> Result<Opts, String> {
         h: 1040.0,
         dark: false,
         classic: false,
+        mac: false,
+        shared: false,
+        compose: false,
+        settings: false,
+        accounts: false,
         module: None,
         reading: None,
         select: false,
@@ -47,6 +57,23 @@ fn parse() -> Result<Opts, String> {
     };
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--shared" => {
+                o.shared = true;
+                o.mac = true;
+            }
+            "--compose" => {
+                o.compose = true;
+                o.mac = true;
+            }
+            "--accounts" => {
+                o.accounts = true;
+                o.mac = true;
+            }
+            "--settings" => {
+                o.settings = true;
+                o.mac = true;
+            }
+            "--mac" => o.mac = true,
             "--dark" => o.dark = true,
             "--classic" => o.classic = true,
             "--select" => o.select = true,
@@ -74,13 +101,20 @@ fn parse() -> Result<Opts, String> {
         }
     }
     if o.out.is_empty() {
-        return Err("usage: ui_shot <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME] [--reading POS] [--select] [--classic] [--scale F]".into());
+        return Err("usage: ui_shot <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME] [--reading POS] [--select] [--classic] [--mac] [--shared] [--compose] [--settings] [--accounts] [--scale F]".into());
     }
     Ok(o)
 }
 
 fn shoot(o: &Opts) -> Result<(), String> {
-    let mut app = App::new(sample_session());
+    let mut session = sample_session();
+    if o.mac {
+        session.mailbox = mailcraft_engine::sample::mac_sample_mailbox(session.now());
+    }
+    let mut app = App::new(session);
+    if o.mac {
+        app.enable_mac_style();
+    }
     if o.dark {
         app.run("options.set", json!({ "key": "view.darkMode", "value": true }));
     }
@@ -89,6 +123,26 @@ fn shoot(o: &Opts) -> Result<(), String> {
     }
     if let Some(pos) = &o.reading {
         app.run("view.readingPane", json!({ "position": pos }));
+    }
+    if o.shared
+        && let Some(inbox) = app
+            .s
+            .mailbox
+            .accounts
+            .iter()
+            .find(|a| a.address == "design@example.net")
+            .and_then(|a| app.s.mailbox.role_folder(a.id, mailcraft_engine::model::FolderRole::Inbox))
+    {
+        app.run("nav.selectFolder", json!({"folder": inbox.0}));
+    }
+    if o.accounts {
+        app.run("file.accountSettings", json!({}));
+    }
+    if o.settings {
+        app.run("options.open", json!({"page": "general"}));
+    }
+    if o.compose {
+        app.run("mail.newEmail", json!({}));
     }
     if o.select {
         let first = queries::list_rows(&app.s).into_iter().find_map(|r| match r {
@@ -112,6 +166,8 @@ fn shoot(o: &Opts) -> Result<(), String> {
                 if !fonts_done {
                     App::install_fonts(ui.ctx());
                     fonts_done = true;
+                    ui.ctx().request_repaint();
+                    return;
                 }
                 app.ui_root(ui);
             },

@@ -812,6 +812,14 @@ fn spec(
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        spec(
+            "accounts.addShared",
+            "Add shared or delegated mailbox",
+            r#"{"account": number|string (OAuth IMAP delegate), "address": string, "displayName"?: string, "delegated"?: bool, "sendAs"?: bool} (creates a mailbox requiring its own OAuth sign-in as the delegate; grants no server permissions)"#,
+            true,
+            has_server_account,
+            add_shared,
+        ),
         spec("accounts.list", "Account Settings...", "", false, always, list),
         spec(
             "accounts.add",
@@ -979,6 +987,7 @@ pub(crate) fn account_settings_json(s: &Session, a: &Account) -> Value {
         "senderName": a.sender_name,
         "default": a.is_default,
         "canSend": a.can_send(),
+        "linkedMailbox": a.linked_mailbox,
         "incoming": a.incoming.as_ref().map(server_json),
         "outgoing": a.outgoing.as_ref().map(server_json),
         "credential": match a.credential { CredentialKind::Password => "password", CredentialKind::OAuthToken => "oauthToken" },
@@ -1225,6 +1234,71 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
     Ok(
         json!({"account": id.0, "name": display_name, "address": address, "default": make_default, "kind": if pop3 { "pop3" } else { kind_name(kind) }}),
     )
+}
+
+/// OAuth shared IMAP uses the target mailbox as SASL user and a delegate's independently granted token.
+/// Never copy a refresh token: each mailbox signs in separately, avoiding rotating-token races.
+fn add_shared(s: &mut Session, p: &Value) -> CmdResult {
+    load_prefs(s);
+    if s.mailbox.accounts.len() >= MAX_ACCOUNTS {
+        return Err(CmdError::Params("too many accounts".into()));
+    }
+    let owner = find_account(s, p, "account")?;
+    let a =
+        s.mailbox.account(owner).cloned().ok_or_else(|| CmdError::Params("no delegate account".into()))?;
+    if a.kind != AccountKind::Imap
+        || a.credential != CredentialKind::OAuthToken
+        || is_pop3(s, owner)
+        || a.linked_mailbox.is_some()
+    {
+        return Err(CmdError::Params("choose a personal IMAP account configured with OAuth first".into()));
+    }
+    let address = clean_line("the mailbox address", str_field(p, &["address"])?.unwrap_or(""))?;
+    if !valid_address(&address) {
+        return Err(CmdError::Params("enter a valid mailbox address".into()));
+    }
+    if s.mailbox.accounts.iter().any(|x| x.address.eq_ignore_ascii_case(&address)) {
+        return Err(CmdError::Params("this mailbox is already added".into()));
+    }
+    let display = clean_line("the mailbox name", str_field(p, &["displayName"])?.unwrap_or(&address))?;
+    let mut incoming =
+        a.incoming.clone().ok_or_else(|| CmdError::Params("the delegate has no incoming server".into()))?;
+    incoming.username = address.clone();
+    incoming.auth = "XOAUTH2".into();
+    let send_as = opt_bool(p, "sendAs").unwrap_or(false);
+    let outgoing = if send_as {
+        a.outgoing.clone().map(|mut server| {
+            server.username = address.clone();
+            server.auth = "XOAUTH2".into();
+            server
+        })
+    } else {
+        None
+    };
+    let id = s.mailbox.add_account(Account {
+        kind: AccountKind::Imap,
+        display_name: display,
+        address: address.clone(),
+        sender_name: String::new(),
+        incoming: Some(incoming),
+        outgoing,
+        credential: CredentialKind::OAuthToken,
+        linked_mailbox: Some(mailcraft_model::account::LinkedMailbox {
+            principal_address: a.address.clone(),
+            delegated: opt_bool(p, "delegated").unwrap_or(false),
+            send_as,
+        }),
+        ..Default::default()
+    });
+    s.mailbox.create_default_folders(id);
+    let mut opts = account_options(s, owner);
+    if let Some(binding) = &mut opts.oauth {
+        binding.expires_at = None;
+    }
+    opts.address = address.clone();
+    update_options(s, id, |o| *o = opts);
+    s.refresh_me();
+    Ok(json!({"account": id.0, "address": address, "signInAs": a.address, "requiresSignIn": true}))
 }
 
 fn edit(s: &mut Session, p: &Value) -> CmdResult {
@@ -1609,7 +1683,8 @@ fn oauth_sign_in(s: &mut Session, p: &Value) -> CmdResult {
         }
     }
     update_options(s, id, |o| o.oauth = Some(binding.clone()));
-    let state = crate::sync::start_oauth(s, id, &a.address, flow == "device").map_err(CmdError::Failed)?;
+    let login = a.linked_mailbox.as_ref().map(|m| m.principal_address.as_str()).unwrap_or(&a.address);
+    let state = crate::sync::start_oauth(s, id, login, flow == "device").map_err(CmdError::Failed)?;
     Ok(state)
 }
 
@@ -1939,5 +2014,84 @@ mod tests {
         let mut s = Session::open(dir.path()).unwrap();
         load_prefs(&mut s);
         assert!(account_options(&s, id).push, "defaults after a garbled file");
+    }
+}
+
+#[cfg(test)]
+mod shared_mailbox_tests {
+    use super::*;
+    fn fixture() -> (Session, AccountId) {
+        let mut s = Session::new(mailcraft_model::Mailbox::new_local("Local"));
+        let server = ServerSettings {
+            host: "imap.example.com".into(),
+            port: 993,
+            username: "delegate@example.com".into(),
+            ..Default::default()
+        };
+        let id = s.mailbox.add_account(Account {
+            kind: AccountKind::Imap,
+            address: "delegate@example.com".into(),
+            incoming: Some(server.clone()),
+            outgoing: Some(server),
+            credential: CredentialKind::OAuthToken,
+            is_default: true,
+            ..Default::default()
+        });
+        s.mailbox.create_default_folders(id);
+        s.secrets.set(&secret_key(id, false), "delegate-token").unwrap();
+        update_options(&mut s, id, |o| {
+            o.oauth = Some(OAuthBinding {
+                provider: "microsoft".into(),
+                client_id: "test-client".into(),
+                expires_at: Some(99),
+                ..Default::default()
+            })
+        });
+        (s, id)
+    }
+    #[test]
+    fn shared_mailbox_uses_target_user_without_copying_credentials() {
+        let (mut s, owner) = fixture();
+        let v = s
+            .run(
+                "accounts.addShared",
+                &json!({"account": owner.0, "address": "team@example.com", "sendAs": true}),
+            )
+            .unwrap();
+        let id = AccountId(v["account"].as_u64().unwrap() as u32);
+        let a = s.mailbox.account(id).unwrap();
+        assert_eq!(a.incoming.as_ref().unwrap().username, "team@example.com");
+        assert_eq!(a.outgoing.as_ref().unwrap().username, "team@example.com");
+        assert!(a.can_send());
+        assert_eq!(a.linked_mailbox.as_ref().unwrap().principal_address, "delegate@example.com");
+        assert_eq!(s.mailbox.default_account().unwrap().id, owner);
+        assert!(account_secret(&s, id, false).is_none());
+        assert!(s.secrets.get(&refresh_key(id)).is_none());
+        let options = account_options(&s, id);
+        assert_eq!(options.address, "team@example.com");
+        assert_eq!(options.oauth.as_ref().unwrap().client_id, "test-client");
+        assert!(options.oauth.unwrap().expires_at.is_none());
+        assert!(
+            s.run("accounts.addShared", &json!({"account": owner.0, "address": "TEAM@example.com"})).is_err()
+        );
+    }
+    #[test]
+    fn receive_only_is_default_and_basic_auth_is_rejected() {
+        let (mut s, owner) = fixture();
+        let v = s
+            .run(
+                "accounts.addShared",
+                &json!({"account": owner.0, "address": "colleague@example.com", "delegated": true}),
+            )
+            .unwrap();
+        let a = s.mailbox.account(AccountId(v["account"].as_u64().unwrap() as u32)).unwrap();
+        assert!(!a.can_send());
+        assert!(a.outgoing.is_none());
+        assert!(a.linked_mailbox.as_ref().unwrap().delegated);
+        let id = s.mailbox.add_account(Account { kind: AccountKind::Imap, ..Default::default() });
+        assert!(s.run("accounts.addShared", &json!({"account": id.0, "address": "no@example.com"})).is_err());
+        assert!(
+            s.run("accounts.addShared", &json!({"account": owner.0, "address": "bad\r\naddress"})).is_err()
+        );
     }
 }

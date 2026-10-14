@@ -284,6 +284,15 @@ pub fn mentions_me(s: &Session, item: &MailItem) -> bool {
 
 /// Items the message list shows for the selected folder after search, Focused/Other and the filter, sorted
 /// (not yet grouped), plus the view settings used.
+/// Inbox contents with each message retaining its actual account and folder.
+pub fn inbox_items(s: &Session) -> Vec<&MailItem> {
+    s.mailbox
+        .mail
+        .values()
+        .filter(|m| s.mailbox.folder(m.folder).is_some_and(|f| f.role == Some(FolderRole::Inbox)))
+        .collect()
+}
+
 fn view_items(s: &Session) -> (ViewSettings, Vec<&MailItem>) {
     let mb = &s.mailbox;
     let folder = s.selection.folder;
@@ -297,7 +306,7 @@ fn view_items(s: &Session) -> (ViewSettings, Vec<&MailItem>) {
     } else if f.kind == FolderKind::Search {
         crate::search_index::search_folder_items(s, folder).iter().filter_map(|id| mb.mail.get(id)).collect()
     } else {
-        let mut v = mb.items_in(folder);
+        let mut v = if s.view.unified_inbox { inbox_items(s) } else { mb.items_in(folder) };
         if f.role == Some(FolderRole::Inbox) && vs.focused_inbox {
             let want = if s.view.focused_tab { FocusClass::Focused } else { FocusClass::Other };
             v.retain(|m| m.focus == want);

@@ -1,11 +1,38 @@
-# MailCraft roadmap
+# MailCraft Mac roadmap
 
-MailCraft is a clean-room, open-source desktop mail client in Rust, modelled on the classic Outlook
-workflow. This file tracks what is done, what is next, and an honest estimate of how close each area is to
-Outlook. It is updated with every commit.
+This is the Mac-focused fork at [samcapshaw/amailcraft](https://github.com/samcapshaw/amailcraft),
+based on [MonkeySaint/mailcraft](https://github.com/MonkeySaint/mailcraft). **Status: pre-alpha.**
+The goal is a refined Mac mail experience with useful multi-account and shared-mailbox workflows.
 
-Status: **pre-alpha** (2026-10-11). Repository: https://github.com/MonkeySaint/mailcraft. Tags: v0.1.0 (commit 23,
-unpublished: its release run failed), v0.1.1 (commit 26, first GitHub release).
+## Implemented in this fork
+
+| Area | Current behavior |
+|---|---|
+| Mac shell | Compact toolbar and search, neutral icons, light/dark appearances, system font loading on macOS |
+| Unified inbox | Combined Inbox folders and unread counts, inbox-scoped search, source-aware message actions |
+| Linked mailboxes | Shared/delegated labels, independent OAuth grants, receive-only default, explicit Send As opt-in |
+| Compose | Visible From field, compact actions, existing rich formatting behind Formatting |
+| Settings | Icon navigation, layered grouped forms, aligned controls, switches, appearance selector, Save/Cancel |
+| Account manager | Mailbox list and details, connection actions, linked-mailbox entry point, advanced options |
+| Identity | Original envelope icon, separate Mac profile and `dev.mailcraft.mac` bundle identifier |
+
+## Next priorities
+
+- Continue visual and interaction polish across mail, compose, and less frequently used dialogs.
+- Verify keyboard navigation, accessibility, and narrow-window behavior throughout the Mac shell.
+- Validate linked mailbox OAuth and Send As behavior against a Microsoft 365 tenant before claiming production compatibility.
+- Add account discovery and richer permission feedback; evaluate Graph for organizations that disable IMAP/SMTP.
+- Plan Send on Behalf and shared Exchange calendar support; neither is implemented today.
+- Prepare a signed, notarized Mac distribution and fork-specific release process.
+
+See [Mac account setup and limits](docs/mac.md) for implemented behavior and known gaps.
+The existing catalog measures command registration; it does not prove complete feature compatibility.
+
+## Upstream history
+
+The milestones and parity estimates below are retained from upstream for provenance. Their commit
+numbers, release tags, dates, and estimates describe the original project, not a new audit or releases
+of this Mac fork. The inherited upstream baseline was documented as pre-alpha on 2026-10-11.
 
 ## Milestones
 

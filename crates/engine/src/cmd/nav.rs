@@ -30,6 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
         module("nav.notes", "Notes", "Module rail › More Apps", "", nav_notes),
         module("nav.folders", "More Apps / Folders", "Module rail › More Apps", "", nav_folders),
         module("nav.shortcuts", "Shortcuts", "Module rail › More Apps", "", nav_shortcuts),
+        module("nav.unifiedInbox", "All Inboxes", "Folder pane", "", unified_inbox),
         CommandSpec {
             id: "nav.selectFolder",
             label: "Select Folder",
@@ -200,6 +201,7 @@ fn remember_folder(s: &mut Session) {
 
 /// Shows `folder` in the list (clears the selection and any search).
 fn show_folder(s: &mut Session, folder: FolderId) {
+    s.view.unified_inbox = false;
     leave_focus(s, None);
     if s.selection.folder != folder {
         s.view.search.clear();
@@ -208,6 +210,7 @@ fn show_folder(s: &mut Session, folder: FolderId) {
 }
 
 fn switch_module(s: &mut Session, module: Module) -> FolderId {
+    s.view.unified_inbox = false;
     remember_folder(s);
     s.view.module = module;
     let kind = module_kind(module);
@@ -340,6 +343,20 @@ fn folder_param(p: &Value) -> Result<Option<FolderId>, CmdError> {
     }
 }
 
+fn unified_inbox(s: &mut Session, _: &Value) -> CmdResult {
+    let folder = s
+        .mailbox
+        .default_account()
+        .and_then(|a| s.mailbox.role_folder(a.id, FolderRole::Inbox))
+        .or_else(|| s.mailbox.folders.values().find(|f| f.role == Some(FolderRole::Inbox)).map(|f| f.id))
+        .ok_or_else(|| CmdError::Failed("no inbox is available".into()))?;
+    select_folder_id(s, folder)?;
+    s.view.module = Module::Mail;
+    s.view.search.clear();
+    s.view.unified_inbox = true;
+    Ok(json!({"unifiedInbox": true}))
+}
+
 fn select_folder(s: &mut Session, p: &Value) -> CmdResult {
     let folder = folder_param(p)?.ok_or_else(|| CmdError::Params("`folder` (folder id) required".into()))?;
     select_folder_id(s, folder)
@@ -425,7 +442,10 @@ fn select_item(s: &mut Session, p: &Value) -> CmdResult {
         let is_mail = s.mailbox.mail.contains_key(&f);
         // A message found by a search stays in the results; an item the current module view lists (the
         // To-Do List's flagged messages and contacts) stays in that view.
-        let searching = is_mail && !s.view.search.trim().is_empty();
+        let searching = is_mail
+            && (!s.view.search.trim().is_empty()
+                || (s.view.unified_inbox
+                    && s.mailbox.folder(folder).is_some_and(|f| f.role == Some(FolderRole::Inbox))));
         let listed_here =
             modules::module_kind(s, s.selection.folder).is_some() && shown_order(s).contains(&f);
         if !searching && !listed_here {
@@ -626,5 +646,65 @@ mod tests {
         assert!(r["items"].as_array().unwrap().len() >= 2, "{r}");
         assert!(s.run("nav.selectItem", &json!({"id": u64::MAX})).is_err());
         assert!(s.run("nav.selectItem", &json!({"ids": []})).is_err());
+    }
+}
+
+#[cfg(test)]
+mod unified_tests {
+    use super::*;
+    #[test]
+    fn aggregate_keeps_selection_and_actions_in_the_original_mailbox() {
+        let mut s = Session::new(crate::sample::mac_sample_mailbox(crate::sample::sample_now()));
+        s.run("nav.unifiedInbox", &json!({})).unwrap();
+        let ids = queries::visible_item_ids(&s);
+        let accounts: std::collections::BTreeSet<_> = ids
+            .iter()
+            .filter_map(|id| s.mailbox.mail.get(id))
+            .filter_map(|m| s.mailbox.folder_account(m.folder))
+            .collect();
+        assert_eq!(accounts.len(), 3);
+        assert!(ids.iter().all(|id| {
+            s.mailbox.mail.get(id).is_some_and(|m| {
+                s.mailbox.folder(m.folder).is_some_and(|f| f.role == Some(FolderRole::Inbox))
+            })
+        }));
+        let shared = s.mailbox.accounts.iter().find(|a| a.address == "design@example.net").unwrap().clone();
+        let message = ids
+            .iter()
+            .copied()
+            .find(|id| {
+                s.mailbox.mail.get(id).is_some_and(|m| s.mailbox.folder_account(m.folder) == Some(shared.id))
+            })
+            .unwrap();
+        s.run("nav.selectItem", &json!({"id": message.0})).unwrap();
+        assert!(s.view.unified_inbox);
+        let compose = s.run("mail.reply", &json!({})).unwrap()["compose"].as_u64().unwrap();
+        assert!(s.composes.get(&compose).unwrap().from.contains(&shared.address));
+        s.run("mail.archive", &json!({"ids": [message.0]})).unwrap();
+        assert_eq!(
+            s.mailbox.mail.get(&message).unwrap().folder,
+            s.mailbox.role_folder(shared.id, FolderRole::Archive).unwrap()
+        );
+        assert!(!queries::visible_item_ids(&s).contains(&message));
+        assert!(s.view.unified_inbox);
+        let own_inbox = s.mailbox.role_folder(shared.id, FolderRole::Inbox).unwrap();
+        s.run("nav.selectFolder", &json!({"folder": own_inbox.0})).unwrap();
+        assert!(!s.view.unified_inbox);
+        assert!(
+            queries::visible_item_ids(&s)
+                .iter()
+                .all(|id| s.mailbox.mail.get(id).unwrap().folder == own_inbox)
+        );
+    }
+    #[test]
+    fn aggregate_search_is_limited_to_inboxes() {
+        let mut s = Session::new(crate::sample::mac_sample_mailbox(crate::sample::sample_now()));
+        s.run("nav.unifiedInbox", &json!({})).unwrap();
+        assert_eq!(crate::search_index::scope_folders(&s).len(), 3);
+        s.run("search.query", &json!({"text": "Grace"})).unwrap();
+        let ids = queries::visible_item_ids(&s);
+        assert!(!ids.is_empty());
+        assert!(ids.iter().all(|id| s.mailbox.folder(s.mailbox.mail.get(id).unwrap().folder).unwrap().role
+            == Some(FolderRole::Inbox)));
     }
 }

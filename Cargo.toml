@@ -7,7 +7,7 @@ version = "0.1.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.90"
-description = "A clean-room, open-source desktop mail client modelled on the classic Outlook workflow"
+description = "A Mac-focused, local-first desktop mail client with unified and shared mailboxes"
 
 [workspace.dependencies]
 # internal

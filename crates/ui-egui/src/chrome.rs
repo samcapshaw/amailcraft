@@ -296,6 +296,10 @@ pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
         let prev = std::mem::take(&mut st.layout);
         st.prev_pane_rects = prev.rects;
     });
+    if app.mac_style {
+        crate::mac::main_window(ui, app, frame);
+        return;
+    }
     let mut top = full.top();
 
     let title = Rect::from_min_max(full.min, pos2(full.right(), top + size::TITLE_BAR));
@@ -1243,7 +1247,13 @@ fn pane(
     });
     let salt = format!("mc_pane_{name}");
     let stroke = Stroke::new(if app.theme.dark { 0.0 } else { 1.0 }, app.theme.separator);
-    ui.painter().rect(rect, CornerRadius::same(size::PANE_RADIUS), fill, stroke, egui::StrokeKind::Inside);
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(if app.mac_style { 0 } else { size::PANE_RADIUS }),
+        fill,
+        stroke,
+        egui::StrokeKind::Inside,
+    );
     let mut c = child(ui, rect, &salt, Layout::top_down(Align::Min));
     add(&mut c, app);
     focus_ring(ui, app, name, rect);
@@ -1275,13 +1285,13 @@ fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
     v.min(hi).max(lo)
 }
 
-fn content_area(ui: &mut Ui, app: &mut App, frame: &Frame) {
+pub(crate) fn content_area(ui: &mut Ui, app: &mut App, frame: &Frame) {
     let rect = ui.max_rect();
     ui.painter().rect_filled(rect, CornerRadius::ZERO, app.theme.backdrop);
-    let gap = size::PANE_GAP;
+    let gap = if app.mac_style { 0.0 } else { size::PANE_GAP };
     let inner = Rect::from_min_max(
-        pos2(rect.left() + gap, rect.top() + 8.0),
-        pos2(rect.right() - gap, rect.bottom() - 8.0),
+        pos2(rect.left() + gap, rect.top() + if app.mac_style { 0.0 } else { 8.0 }),
+        pos2(rect.right() - gap, rect.bottom() - if app.mac_style { 0.0 } else { 8.0 }),
     );
     if inner.width() < 1.0 || inner.height() < 1.0 {
         return;
@@ -1311,7 +1321,7 @@ fn content_area(ui: &mut Ui, app: &mut App, frame: &Frame) {
 fn mail_panes(ui: &mut Ui, app: &mut App, frame: &Frame, area: Rect) {
     let ctx = ui.ctx().clone();
     let theme = app.theme.clone();
-    let split = size::PANE_SPLIT;
+    let split = if app.mac_style { 1.0 } else { size::PANE_SPLIT };
     // Pane sizes the splitters left last time (saved with the profile; 0 = default).
     let saved = |key: &str| Some(app.s.settings.int(key)).filter(|v| *v > 0).map(|v| v as f32);
     let saved_folder = saved("state.folderPaneWidth");
@@ -1320,7 +1330,7 @@ fn mail_panes(ui: &mut Ui, app: &mut App, frame: &Frame, area: Rect) {
     let (mut folder_w, mut list_w, mut list_frac) = with_shell(&ctx, |st| {
         (
             st.folder_w.or(saved_folder).unwrap_or(size::FOLDER_PANE),
-            st.list_w.or(saved_list).unwrap_or(size::LIST),
+            st.list_w.or(saved_list).unwrap_or(if app.mac_style { 350.0 } else { size::LIST }),
             st.list_frac.or(saved_frac).unwrap_or(size::BOTTOM_LIST_FRACTION),
         )
     });
@@ -1340,7 +1350,13 @@ fn mail_panes(ui: &mut Ui, app: &mut App, frame: &Frame, area: Rect) {
     let mut rest = area;
     if folder_shown > 0.0 {
         let fr = Rect::from_min_size(area.min, vec2(folder_shown.min(area.width()), area.height()));
-        pane(ui, app, fr, "folders", theme.pane, |ui, app| crate::folders::folder_pane(ui, app, frame));
+        pane(ui, app, fr, "folders", if app.mac_style { theme.chrome } else { theme.pane }, |ui, app| {
+            if app.mac_style && !minimized {
+                crate::mac::sidebar(ui, app);
+            } else {
+                crate::folders::folder_pane(ui, app, frame);
+            }
+        });
         let gap = Rect::from_min_max(pos2(fr.right(), area.top()), pos2(fr.right() + split, area.bottom()));
         if !minimized {
             let d = splitter(ui, "mc_split_folder", gap, true, &theme);

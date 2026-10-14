@@ -37,9 +37,21 @@ pub struct ServerSettings {
     pub allow_plaintext_auth: bool,
 }
 
+/// A mailbox opened by a delegate. This records local intent; the server still authorizes every operation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LinkedMailbox {
+    pub principal_address: String,
+    pub delegated: bool,
+    /// Allow sending as this mailbox. Receive-only is the conservative default.
+    pub send_as: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Account {
     pub id: AccountId,
+    #[serde(default)]
+    pub linked_mailbox: Option<LinkedMailbox>,
     pub kind: AccountKind,
     /// Shown as the mailbox root label (the address, as observed).
     pub display_name: String,
@@ -65,6 +77,9 @@ pub struct Account {
 impl Account {
     /// True when the account can send (has an outgoing server or is a JMAP/Exchange account).
     pub fn can_send(&self) -> bool {
+        if self.linked_mailbox.as_ref().is_some_and(|m| !m.send_as) {
+            return false;
+        }
         match self.kind {
             AccountKind::Local => false,
             AccountKind::Imap => self.outgoing.is_some(),

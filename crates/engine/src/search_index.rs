@@ -363,6 +363,14 @@ fn deleted_folders(mb: &Mailbox) -> BTreeSet<FolderId> {
 pub fn scope_folders(s: &Session) -> Vec<FolderId> {
     let mb = &s.mailbox;
     let sel = s.selection.folder;
+    if s.view.unified_inbox {
+        return mb
+            .folders
+            .values()
+            .filter(|f| f.role == Some(mailcraft_model::FolderRole::Inbox))
+            .map(|f| f.id)
+            .collect();
+    }
     if !mb.folders.contains_key(&sel) {
         return Vec::new();
     }

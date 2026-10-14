@@ -5,7 +5,7 @@
 //! ```
 //!
 //! The profile (mail store) defaults to the platform data folder: `$XDG_DATA_HOME/MailCraft` or
-//! `~/.local/share/MailCraft` on Linux and other Unix systems, `~/Library/Application Support/MailCraft` on
+//! `~/.local/share/MailCraft` on Linux and other Unix systems, `~/Library/Application Support/MailCraft Mac` on
 //! macOS, `%APPDATA%\MailCraft` on Windows.
 
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
@@ -87,7 +87,7 @@ fn default_profile() -> Option<PathBuf> {
             .map(|d| d.join("MailCraft"));
     }
     if cfg!(target_os = "macos") {
-        return env("HOME").map(|h| h.join("Library").join("Application Support").join("MailCraft"));
+        return env("HOME").map(|h| h.join("Library").join("Application Support").join("MailCraft Mac"));
     }
     env("XDG_DATA_HOME")
         .filter(|p| p.is_absolute())
@@ -100,7 +100,7 @@ fn default_profile() -> Option<PathBuf> {
 fn open_session(args: &Args) -> Session {
     if args.sample {
         let now = mailcraft_engine::model::DateTime::now_utc();
-        return Session::new(mailcraft_engine::sample::sample_mailbox(now));
+        return Session::new(mailcraft_engine::sample::mac_sample_mailbox(now));
     }
     let Some(dir) = args.profile.clone().or_else(default_profile) else {
         let mut s = Session::new(mailcraft_engine::model::Mailbox::new_local(
@@ -178,6 +178,7 @@ fn main() -> ExitCode {
 
     let session = open_session(&args);
     let mut app = App::new(session);
+    app.enable_mac_style();
     file_dialogs::install(&mut app);
     clipboard::install();
     app.ui.control_port = args.control_port.or_else(|| {
@@ -188,11 +189,16 @@ fn main() -> ExitCode {
     });
 
     let mut viewport = eframe::egui::ViewportBuilder::default()
-        .with_title("MailCraft")
-        .with_app_id("saint.dev.MailCraft")
+        .with_title("MailCraft Mac")
+        .with_app_id("dev.mailcraft.mac")
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size(mailcraft_ui_egui::theme::size::MIN_WINDOW)
         .with_decorations(true);
+    #[cfg(target_os = "macos")]
+    {
+        viewport =
+            viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
+    }
     if let Some((rgba, width, height)) = mailcraft_ui_egui::app_icon_rgba(256) {
         viewport = viewport.with_icon(eframe::egui::IconData { rgba, width, height });
     }
@@ -247,7 +253,7 @@ mod tests {
     #[test]
     fn default_profile_is_named_mailcraft() {
         if let Some(p) = default_profile() {
-            assert!(p.ends_with("MailCraft"));
+            assert!(p.ends_with(if cfg!(target_os = "macos") { "MailCraft Mac" } else { "MailCraft" }));
         }
     }
 }

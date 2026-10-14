@@ -189,11 +189,22 @@ pub(crate) fn window(
     body: impl FnOnce(&mut Ui, &mut App) -> Out,
 ) -> Out {
     let t = app.theme.clone();
+    let polished = app.mac_style && matches!(d.name, "options" | "accountSettings");
+    let surface = if polished {
+        if t.dark { Color32::from_rgb(33, 34, 37) } else { Color32::from_rgb(246, 247, 249) }
+    } else {
+        t.pane
+    };
     let frame = egui::Frame::new()
-        .fill(t.pane)
+        .fill(surface)
         .stroke(egui::Stroke::new(1.0, t.separator))
-        .corner_radius(6.0)
-        .shadow(egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(60) });
+        .corner_radius(if polished { 13.0 } else { 6.0 })
+        .shadow(egui::Shadow {
+            offset: [0, if polished { 12 } else { 4 }],
+            blur: if polished { 40 } else { 16 },
+            spread: 0,
+            color: Color32::from_black_alpha(if polished { 80 } else { 60 }),
+        });
     ctx.data_mut(|m| m.insert_temp(Id::new(TOP_FLAG), d.top));
     // A newly shown topmost dialog takes keyboard focus from whatever had it (e.g. the button that opened it),
     // so Enter/Space go to this dialog.
