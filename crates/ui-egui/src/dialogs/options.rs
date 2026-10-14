@@ -4,6 +4,8 @@
 //! generated from that schema, with the buttons and notes of each section added here. Buttons open the
 //! matching dialogs or run the matching commands.
 
+mod appearance;
+
 use egui::{Context, RichText};
 use serde_json::{Map, Value, json};
 
@@ -236,7 +238,7 @@ pub(crate) fn show(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                     .insert(key.to_owned(), json!(app.s.mailbox.folder_path(mailcraft_model::FolderId(f))));
             }
         }
-        if app.mac_style {
+        if app.mac_style || app.theme_chooser_enabled {
             return mac_options(ctx, app, d, uid, st);
         }
         window(ctx, app, d, "MailCraft Options", 820.0, |ui, app| {
@@ -304,22 +306,8 @@ pub(crate) fn show(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
 fn mac_options(ctx: &Context, app: &mut App, d: &Dlg<'_>, uid: u64, st: &mut OptState) -> Out {
     window(ctx, app, d, "Settings", 880.0, |ui, app| {
         let mut out = Out::Keep;
-        let card = if app.theme.dark { egui::Color32::from_rgb(43, 44, 48) } else { egui::Color32::WHITE };
-        let edge = if app.theme.dark {
-            egui::Color32::from_rgb(62, 63, 68)
-        } else {
-            egui::Color32::from_rgb(224, 227, 233)
-        };
-        ui.spacing_mut().interact_size.y = 28.0;
-        ui.spacing_mut().button_padding = egui::vec2(9.0, 5.0);
-        ui.visuals_mut().widgets.inactive.bg_fill = if app.theme.dark {
-            egui::Color32::from_rgb(35, 36, 39)
-        } else {
-            egui::Color32::from_rgb(249, 250, 252)
-        };
-        ui.visuals_mut().widgets.inactive.weak_bg_fill = ui.visuals().widgets.inactive.bg_fill;
-        ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(0.7, edge);
-        ui.visuals_mut().widgets.inactive.corner_radius = egui::CornerRadius::same(6);
+        let card = app.theme.card_surface();
+        let edge = app.theme.control_edge();
         let height = (ctx.content_rect().height() - 230.0).clamp(240.0, 490.0);
         ui.add_space(8.0);
         ui.horizontal_top(|ui| {
@@ -343,7 +331,15 @@ fn mac_options(ctx: &Context, app: &mut App, d: &Dlg<'_>, uid: u64, st: &mut Opt
                                     egui::Color32::from_black_alpha(if app.theme.dark { 25 } else { 10 }),
                                 );
                             }
-                            ui.painter().rect_filled(rect, 6, if selected { card } else { app.theme.hover });
+                            ui.painter().rect_filled(
+                                rect,
+                                6,
+                                if selected {
+                                    if app.theme.custom_surfaces { app.theme.selected } else { card }
+                                } else {
+                                    app.theme.hover
+                                },
+                            );
                         }
                         let icon = match i {
                             1 => "mail",
@@ -412,7 +408,11 @@ fn mac_options(ctx: &Context, app: &mut App, d: &Dlg<'_>, uid: u64, st: &mut Opt
                     .min_scrolled_height(height)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        if pid == "general" {
+                            appearance::chooser(ui, app, st);
+                        }
                         let mut groups = sections(pid);
+                        groups.retain(|section| section.heading != "Appearance");
                         if pid == "general" {
                             groups.sort_by_key(|sec| match sec.heading {
                                 "Personalize your copy of MailCraft" => 0,
@@ -457,7 +457,9 @@ fn mac_options(ctx: &Context, app: &mut App, d: &Dlg<'_>, uid: u64, st: &mut Opt
                                 .show(ui, |ui| {
                                     ui.set_width((ui.available_width() - 4.0).max(200.0));
                                     ui.spacing_mut().item_spacing.y = 5.0;
-                                    for (i, def) in sec.defs.iter().enumerate() {
+                                    for (i, def) in
+                                        sec.defs.iter().filter(|d| d.key != "general.theme").enumerate()
+                                    {
                                         if i > 0 {
                                             let (r, _) = ui.allocate_exact_size(
                                                 egui::vec2(ui.available_width(), 1.0),
@@ -684,6 +686,17 @@ fn mac_setting(ui: &mut egui::Ui, app: &App, uid: u64, st: &mut OptState, d: &'s
 /// Applies the edits; returns the settings that were refused.
 fn apply(ctx: &Context, app: &mut App, st: &OptState) -> Vec<String> {
     let mut errors = Vec::new();
+    for key in settings::PALETTE_KEYS {
+        if let Some(value) = st.edits.get(*key)
+            && let Some(def) = settings::def(key)
+            && let Err(error) = settings::normalize(def, value)
+        {
+            errors.push(error.to_string());
+        }
+    }
+    if !errors.is_empty() {
+        return errors;
+    }
     for (k, v) in &st.edits {
         if app.s.option(k).as_ref() == Some(v) {
             continue;
@@ -949,6 +962,48 @@ mod tests {
         assert_eq!(tz_label(345), "(UTC+05:45)");
         assert_eq!(tz_label(-30), "(UTC-00:30)");
     }
+    #[test]
+    fn invalid_palette_keeps_all_pending_edits_unapplied() {
+        let mut app = App::new(sample_session());
+        let mut state = OptState::default();
+        state.edits.insert("general.interface".into(), json!("omarchy"));
+        state.edits.insert("general.accentColor".into(), json!("#oops"));
+        assert!(!apply(&Context::default(), &mut app, &state).is_empty());
+        assert_eq!(app.s.settings.text("general.interface"), "apple");
+    }
+
+    #[test]
+    fn appearance_chooser_saves_and_cancel_discards_profile() {
+        let mut app = App::new(sample_session());
+        app.enable_mac_style();
+        app.run("options.open", json!({"page":"general"})).unwrap();
+        let mut h = harness(app);
+        h.get_by_label("Omarchy").click();
+        h.run_steps(2);
+        assert_eq!(h.state().s.settings.text("general.interface"), "apple");
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert_eq!(h.state().s.settings.text("general.interface"), "apple");
+        let mut app = h.into_state();
+        app.run("options.open", json!({"page":"general"})).unwrap();
+        let mut h = harness(app);
+        h.get_by_label("Outlook layout").click();
+        h.run_steps(2);
+        h.get_by_label("Save Changes").click();
+        h.run_steps(2);
+        assert_eq!(h.state().s.settings.text("general.interface"), "outlook");
+        // The same chooser remains reachable with the classic layout selected.
+        let mut app = h.into_state();
+        app.mac_style = false;
+        app.run("options.open", json!({"page":"general"})).unwrap();
+        let mut h = harness(app);
+        h.get_by_label("Apple").click();
+        h.run_steps(2);
+        h.get_by_label("Save Changes").click();
+        h.run_steps(2);
+        assert_eq!(h.state().s.settings.text("general.interface"), "apple");
+    }
+
     #[test]
     fn mac_settings_save_and_cancel_preserve_engine_behavior() {
         let mut app = App::new(sample_session());

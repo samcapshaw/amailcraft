@@ -149,6 +149,13 @@ const fn v(
 use Effect::{Applied as A, Exposed as E, NotApplicable as N, Stored as S};
 use Kind::{Bool, Choice, Days, Int, List, Object, Text, Time, TimeRange};
 
+pub const INTERFACES: &[(&str, &str)] =
+    &[("outlook", "Outlook layout"), ("apple", "Apple"), ("omarchy", "Omarchy · Tokyo Night")];
+
+/// Custom palette keys, shared by validation and the appearance editor.
+pub const PALETTE_KEYS: &[&str] =
+    &["general.accentColor", "general.backgroundColor", "general.surfaceColor", "general.textColor"];
+
 const THEMES: &[(&str, &str)] = &[("light", "Light"), ("dark", "Dark"), ("system", "Use system setting")];
 const SCREEN_TIPS: &[(&str, &str)] = &[
     ("descriptions", "Show feature descriptions in ScreenTips"),
@@ -346,6 +353,12 @@ pub const DEFS: &[Def] = &[
         Choice("none", BACKGROUNDS),
         S,
     ),
+    d("general", "Appearance", "general.interface", "Layout", Choice("apple", INTERFACES), A),
+    d("general", "Appearance", "general.customColors", "Use custom colors", Bool(false), A),
+    d("general", "Appearance", "general.accentColor", "Accent", Text("#7AA2F7", 7), A),
+    d("general", "Appearance", "general.backgroundColor", "Background", Text("#1A1B26", 7), A),
+    d("general", "Appearance", "general.surfaceColor", "Surface", Text("#24283B", 7), A),
+    d("general", "Appearance", "general.textColor", "Text", Text("#C0CAF5", 7), A),
     d("general", "Personalize your copy of MailCraft", "general.theme", "Theme:", Choice("light", THEMES), A),
     d(
         "general",
@@ -1906,6 +1919,12 @@ pub fn normalize(def: &Def, v: &Value) -> Result<Value, CmdError> {
             let s = v.as_str().ok_or_else(|| want_err(def, "a string"))?;
             if s.chars().count() > max || s.chars().any(|c| c.is_control()) {
                 return Err(want_err(def, &format!("a single line of at most {max} characters")));
+            }
+            if PALETTE_KEYS.contains(&def.key) {
+                if s.len() != 7 || !s.starts_with('#') || !s.bytes().skip(1).all(|b| b.is_ascii_hexdigit()) {
+                    return Err(want_err(def, "a color like #7AA2F7"));
+                }
+                return Ok(json!(s.to_ascii_uppercase()));
             }
             Ok(json!(s))
         }

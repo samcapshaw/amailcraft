@@ -31,6 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
         module("nav.folders", "More Apps / Folders", "Module rail › More Apps", "", nav_folders),
         module("nav.shortcuts", "Shortcuts", "Module rail › More Apps", "", nav_shortcuts),
         module("nav.unifiedInbox", "All Inboxes", "Folder pane", "", unified_inbox),
+        module("nav.unifiedSent", "All Sent", "Folder pane", "", unified_sent),
         CommandSpec {
             id: "nav.selectFolder",
             label: "Select Folder",
@@ -202,6 +203,7 @@ fn remember_folder(s: &mut Session) {
 /// Shows `folder` in the list (clears the selection and any search).
 fn show_folder(s: &mut Session, folder: FolderId) {
     s.view.unified_inbox = false;
+    s.view.unified_sent = false;
     leave_focus(s, None);
     if s.selection.folder != folder {
         s.view.search.clear();
@@ -211,6 +213,7 @@ fn show_folder(s: &mut Session, folder: FolderId) {
 
 fn switch_module(s: &mut Session, module: Module) -> FolderId {
     s.view.unified_inbox = false;
+    s.view.unified_sent = false;
     remember_folder(s);
     s.view.module = module;
     let kind = module_kind(module);
@@ -344,17 +347,26 @@ fn folder_param(p: &Value) -> Result<Option<FolderId>, CmdError> {
 }
 
 fn unified_inbox(s: &mut Session, _: &Value) -> CmdResult {
+    unified_folder(s, FolderRole::Inbox)
+}
+
+fn unified_sent(s: &mut Session, _: &Value) -> CmdResult {
+    unified_folder(s, FolderRole::SentItems)
+}
+
+fn unified_folder(s: &mut Session, role: FolderRole) -> CmdResult {
     let folder = s
         .mailbox
         .default_account()
-        .and_then(|a| s.mailbox.role_folder(a.id, FolderRole::Inbox))
-        .or_else(|| s.mailbox.folders.values().find(|f| f.role == Some(FolderRole::Inbox)).map(|f| f.id))
-        .ok_or_else(|| CmdError::Failed("no inbox is available".into()))?;
+        .and_then(|a| s.mailbox.role_folder(a.id, role))
+        .or_else(|| s.mailbox.folders.values().find(|f| f.role == Some(role)).map(|f| f.id))
+        .ok_or_else(|| CmdError::Failed("no matching mailbox folder is available".into()))?;
     select_folder_id(s, folder)?;
     s.view.module = Module::Mail;
     s.view.search.clear();
     s.view.unified_inbox = true;
-    Ok(json!({"unifiedInbox": true}))
+    s.view.unified_sent = role == FolderRole::SentItems;
+    Ok(json!({"unifiedInbox": !s.view.unified_sent, "unifiedSent": s.view.unified_sent}))
 }
 
 fn select_folder(s: &mut Session, p: &Value) -> CmdResult {
@@ -445,7 +457,7 @@ fn select_item(s: &mut Session, p: &Value) -> CmdResult {
         let searching = is_mail
             && (!s.view.search.trim().is_empty()
                 || (s.view.unified_inbox
-                    && s.mailbox.folder(folder).is_some_and(|f| f.role == Some(FolderRole::Inbox))));
+                    && s.mailbox.folder(folder).is_some_and(|f| f.role == Some(queries::aggregate_role(s)))));
         let listed_here =
             modules::module_kind(s, s.selection.folder).is_some() && shown_order(s).contains(&f);
         if !searching && !listed_here {
@@ -652,6 +664,47 @@ mod tests {
 #[cfg(test)]
 mod unified_tests {
     use super::*;
+    #[test]
+    fn aggregate_sent_search_and_actions_keep_source_mailboxes() {
+        let mut s = Session::new(crate::sample::mac_sample_mailbox(crate::sample::sample_now()));
+        let accounts = s.mailbox.accounts.clone();
+        let mut sent = Vec::new();
+        for account in &accounts {
+            let inbox = s.mailbox.role_folder(account.id, FolderRole::Inbox).unwrap();
+            let target = s.mailbox.role_folder(account.id, FolderRole::SentItems).unwrap();
+            if let Some(item) = s.mailbox.items_in(inbox).first().map(|m| m.id) {
+                s.mailbox.mail.get_mut(&item).unwrap().folder = target;
+                s.mailbox.mail.get_mut(&item).unwrap().subject = "sentmarker".into();
+                sent.push((item, target, account.id));
+            }
+        }
+        s.run("nav.unifiedSent", &json!({})).unwrap();
+        s.run("search.query", &json!({"text":"sentmarker"})).unwrap();
+        assert_eq!(queries::visible_item_ids(&s).len(), sent.len());
+        s.run("search.query", &json!({"text":""})).unwrap();
+        let visible = queries::visible_item_ids(&s);
+        assert!(sent.iter().all(|(id, _, _)| visible.contains(id)));
+        assert!(
+            crate::search_index::scope_folders(&s)
+                .iter()
+                .all(|id| s.mailbox.folder(*id).unwrap().role == Some(FolderRole::SentItems))
+        );
+        let (item, _, account) = sent[1];
+        s.run("nav.selectItem", &json!({"id":item.0})).unwrap();
+        assert!(s.view.unified_inbox && s.view.unified_sent);
+        s.run("mail.archive", &json!({"ids":[item.0]})).unwrap();
+        assert_eq!(
+            s.mailbox.mail.get(&item).unwrap().folder,
+            s.mailbox.role_folder(account, FolderRole::Archive).unwrap()
+        );
+        assert!(!queries::visible_item_ids(&s).contains(&item));
+        s.run("nav.unifiedInbox", &json!({})).unwrap();
+        assert!(!s.view.unified_sent);
+        s.run("nav.unifiedSent", &json!({})).unwrap();
+        s.run("nav.selectFolder", &json!({"folder":sent[0].1.0})).unwrap();
+        assert!(!s.view.unified_inbox && !s.view.unified_sent);
+    }
+
     #[test]
     fn aggregate_keeps_selection_and_actions_in_the_original_mailbox() {
         let mut s = Session::new(crate::sample::mac_sample_mailbox(crate::sample::sample_now()));

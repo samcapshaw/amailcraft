@@ -293,6 +293,20 @@ pub fn inbox_items(s: &Session) -> Vec<&MailItem> {
         .collect()
 }
 
+/// Role selected by the active aggregate view (the Inbox flag is retained for profile compatibility).
+pub fn aggregate_role(s: &Session) -> FolderRole {
+    if s.view.unified_sent { FolderRole::SentItems } else { FolderRole::Inbox }
+}
+
+pub fn aggregate_items(s: &Session) -> Vec<&MailItem> {
+    let role = aggregate_role(s);
+    s.mailbox
+        .mail
+        .values()
+        .filter(|m| s.mailbox.folder(m.folder).is_some_and(|f| f.role == Some(role)))
+        .collect()
+}
+
 fn view_items(s: &Session) -> (ViewSettings, Vec<&MailItem>) {
     let mb = &s.mailbox;
     let folder = s.selection.folder;
@@ -306,7 +320,7 @@ fn view_items(s: &Session) -> (ViewSettings, Vec<&MailItem>) {
     } else if f.kind == FolderKind::Search {
         crate::search_index::search_folder_items(s, folder).iter().filter_map(|id| mb.mail.get(id)).collect()
     } else {
-        let mut v = if s.view.unified_inbox { inbox_items(s) } else { mb.items_in(folder) };
+        let mut v = if s.view.unified_inbox { aggregate_items(s) } else { mb.items_in(folder) };
         if f.role == Some(FolderRole::Inbox) && vs.focused_inbox {
             let want = if s.view.focused_tab { FocusClass::Focused } else { FocusClass::Other };
             v.retain(|m| m.focus == want);

@@ -84,3 +84,11 @@ Endpoints must be `https`. The IMAP, POP3 and SMTP servers must offer `AUTH=XOAU
 device code with `TestServers::oauth_approve` (standing in for the person at the verification page) and can
 expire every access token at once to exercise refreshing. See `crates/net/tests/accounts_testmail.rs` and
 `crates/engine/tests/e2e_setup.rs`.
+
+## Microsoft Graph mail
+
+The `microsoft-graph` preset uses the work/school `organizations` authority and Graph delegated mail/shared-mail/sending scopes. It is distinct from `microsoft`, which requests Outlook IMAP/POP/SMTP scopes. Configure a public-client registration and obtain a new Graph grant; existing IMAP tokens are not migrated. See [Graph setup and limits](../../../docs/microsoft365.md). Calendar/contact scopes are not requested by this initial mail-only transport.
+
+`microsoft-graph-pim` is the optional work/school mail + organizer preset. It adds delegated `Calendars.Read.Shared` and `Contacts.Read.Shared` permissions for read-only calendar/default-contact snapshots. Existing mail-only grants need a new sign-in before enabling these services.
+
+`microsoft-graph-pim-write` is the opt-in organizer editing preset. It replaces the read-only organizer scopes with `Calendars.ReadWrite.Shared` and `Contacts.ReadWrite.Shared`. Existing grants require a new sign-in; actual shared-calendar/mailbox permissions remain server-controlled.

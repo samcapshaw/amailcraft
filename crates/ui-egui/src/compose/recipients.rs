@@ -315,6 +315,11 @@ pub(super) fn address_field(
     let color = if pills { Color32::TRANSPARENT } else { app.theme.text };
     let te = TextEdit::singleline(&mut text)
         .id(fid)
+        .hint_text(if app.mac_style {
+            if f == Field::To { "Name or email address" } else { "Optional" }
+        } else {
+            ""
+        })
         .frame(egui::Frame::NONE)
         .text_color(color)
         .vertical_align(egui::Align::Center)
@@ -324,7 +329,13 @@ pub(super) fn address_field(
         r = r.labelled_by(l);
     }
     super::claim_initial_focus(ui, cid, &r);
-    let line_col = if r.has_focus() { app.theme.accent } else { app.theme.separator };
+    let line_col = if r.has_focus() {
+        app.theme.accent.gamma_multiply(0.6)
+    } else if app.mac_style {
+        Color32::TRANSPARENT
+    } else {
+        app.theme.separator
+    };
     ui.painter().line_segment(
         [pos2(rect.left(), rect.bottom() - 1.0), pos2(rect.right(), rect.bottom() - 1.0)],
         Stroke::new(1.0, line_col),

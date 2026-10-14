@@ -189,12 +189,8 @@ pub(crate) fn window(
     body: impl FnOnce(&mut Ui, &mut App) -> Out,
 ) -> Out {
     let t = app.theme.clone();
-    let polished = app.mac_style && matches!(d.name, "options" | "accountSettings");
-    let surface = if polished {
-        if t.dark { Color32::from_rgb(33, 34, 37) } else { Color32::from_rgb(246, 247, 249) }
-    } else {
-        t.pane
-    };
+    let polished = app.mac_style || app.theme_chooser_enabled;
+    let surface = if polished { t.dialog_surface() } else { t.pane };
     let frame = egui::Frame::new()
         .fill(surface)
         .stroke(egui::Stroke::new(1.0, t.separator))
@@ -226,7 +222,7 @@ pub(crate) fn window(
             ui,
             |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(title).strong().size(14.0));
+                    ui.label(RichText::new(title).strong().size(if polished { 17.0 } else { 14.0 }));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if title_close(ui, app) {
                             closed = true;
@@ -274,6 +270,27 @@ pub(crate) fn control_border(t: &crate::theme::Theme) -> Color32 {
 /// check boxes, radio buttons and buttons invisible on a dialog's plain background. Dialogs give them a
 /// border, as form controls have.
 pub(crate) fn dialog_visuals(ui: &mut Ui, t: &crate::theme::Theme) {
+    if t.mac_style {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+        ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
+        ui.spacing_mut().interact_size.y = 28.0;
+        ui.spacing_mut().text_edit_width = 240.0;
+        let v = ui.visuals_mut();
+        v.override_text_color = Some(t.text);
+        v.extreme_bg_color = t.control_surface();
+        v.widgets.inactive.bg_fill = t.card_surface();
+        v.widgets.inactive.weak_bg_fill = t.card_surface();
+        v.widgets.inactive.bg_stroke = egui::Stroke::new(0.7, t.control_edge());
+        v.widgets.hovered.bg_fill = t.hover;
+        v.widgets.hovered.weak_bg_fill = t.hover;
+        v.widgets.hovered.bg_stroke = egui::Stroke::new(0.7, t.control_edge());
+        v.widgets.active.bg_stroke = egui::Stroke::new(1.0, t.accent);
+        for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open]
+        {
+            w.corner_radius = egui::CornerRadius::same(6);
+        }
+        return;
+    }
     let border = control_border(t);
     let v = ui.visuals_mut();
     v.override_text_color = Some(t.text);
@@ -347,12 +364,14 @@ pub(crate) fn ok_cancel(ui: &mut Ui, app: &App, ok_enabled: bool) -> Option<bool
 
 /// Section heading inside a dialog page.
 pub(crate) fn heading(ui: &mut Ui, app: &App, text: &str) {
-    ui.add_space(6.0);
+    ui.add_space(if app.mac_style { 14.0 } else { 6.0 });
     ui.label(RichText::new(text).strong().color(app.theme.text));
-    let w = ui.available_width();
-    let (r, _) = ui.allocate_exact_size(Vec2::new(w, 1.0), Sense::hover());
-    ui.painter().rect_filled(r, 0.0, app.theme.separator);
-    ui.add_space(2.0);
+    if !app.mac_style {
+        let w = ui.available_width();
+        let (r, _) = ui.allocate_exact_size(Vec2::new(w, 1.0), Sense::hover());
+        ui.painter().rect_filled(r, 0.0, app.theme.separator);
+    }
+    ui.add_space(if app.mac_style { 4.0 } else { 2.0 });
 }
 
 pub(crate) fn muted(ui: &mut Ui, app: &App, text: &str) {

@@ -215,15 +215,19 @@ pub mod pim {
 
     /// Folder new items of `kind` go to: `params.folder` (must hold `kind`), else [`current_folder`].
     pub fn new_item_folder(s: &Session, p: &Value, kind: Kind) -> Result<FolderId, CmdError> {
-        if let Some(f) = opt_folder(p) {
-            return if is_kind_folder(s, f, kind) {
-                Ok(f)
-            } else {
-                Err(CmdError::Params(format!("folder {} does not hold {} items", f.0, kind.noun())))
-            };
+        let folder = if let Some(f) = opt_folder(p) {
+            if !is_kind_folder(s, f, kind) {
+                return Err(CmdError::Params(format!("folder {} does not hold {} items", f.0, kind.noun())));
+            }
+            f
+        } else {
+            current_folder(s, kind)
+                .ok_or_else(|| CmdError::Failed(format!("there is no folder for {} items", kind.noun())))?
+        };
+        if s.mailbox.folder(folder).is_some_and(|f| f.graph_source.is_some()) {
+            return Err(CmdError::Disabled("This Microsoft 365 folder is read-only. Select a local calendar or address book to create or copy items.".into()));
         }
-        current_folder(s, kind)
-            .ok_or_else(|| CmdError::Failed(format!("there is no folder for {} items", kind.noun())))
+        Ok(folder)
     }
 
     /// Items of `kind` a command acts on: `params.id`, else `params.ids`, else the selection (else focus).
@@ -1947,6 +1951,11 @@ fn run_categorize(s: &mut Session, p: &Value) -> CmdResult {
 /// Refuses changes to the items of a read-only calendar (an internet subscription).
 fn check_writable(s: &Session, folder: FolderId) -> Result<(), CmdError> {
     if props::is_read_only(&s.mailbox, folder) {
+        if s.mailbox.folder(folder).is_some_and(|f| f.graph_source.is_some()) {
+            return Err(CmdError::Disabled(
+                "This Microsoft 365 calendar is read-only. Edit it in Outlook and refresh here.".into(),
+            ));
+        }
         let name = s.mailbox.folder(folder).map(|f| f.name.clone()).unwrap_or_default();
         return Err(CmdError::Disabled(format!(
             "\"{name}\" is a subscribed internet calendar; its items cannot be changed"

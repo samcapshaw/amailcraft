@@ -17,6 +17,7 @@ mod alerts;
 mod categories;
 mod common;
 mod compose_dlg;
+mod connected;
 pub(crate) mod files;
 mod find;
 mod folders;
@@ -40,6 +41,19 @@ use crate::{App, Surface};
 use common::{Dlg, Out};
 pub(crate) use common::{browse_folder, browse_open, browse_save};
 
+/// Compose-owned sheets stay on their native window; embedded and inline composers use the main UI.
+pub(crate) fn dialog_viewport(ctx: &Context, app: &App, params: &Value) -> egui::ViewportId {
+    if app.mac_style
+        && !ctx.embed_viewports()
+        && let Some(cid) = params.get("compose").and_then(Value::as_u64)
+        && app.s.composes.get(&cid).is_some_and(|c| !c.inline)
+    {
+        crate::compose::viewport_id(cid)
+    } else {
+        egui::ViewportId::ROOT
+    }
+}
+
 pub fn dialogs(ctx: &egui::Context, app: &mut App) {
     take_notices(app);
     assign_uids(ctx, app);
@@ -49,6 +63,7 @@ pub fn dialogs(ctx: &egui::Context, app: &mut App) {
         .dialogs
         .clone()
         .into_iter()
+        .filter(|(_, params)| dialog_viewport(ctx, app, params) == ctx.viewport_id())
         .partition(|(name, params)| crate::modules::takes_dialog(app, name, params));
     if !deferred.is_empty() {
         ctx.request_repaint();
@@ -148,6 +163,8 @@ pub fn search_highlight_on(s: &mailcraft_engine::Session) -> bool {
 
 /// Dialog ids with a dedicated renderer (everything the engine emits, plus the UI's own).
 pub const KNOWN: &[&str] = &[
+    "graphItem",
+    "graphPending",
     // folders / pickers
     "moveToFolder",
     "copyToFolder",
@@ -319,6 +336,9 @@ fn show(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
         // The Reminders window is the modules area's own window (it also pops up when reminders come due).
         crate::modules::open_reminders(ctx, app);
         return Out::Close;
+    }
+    if let Some(out) = connected::show(ctx, app, d) {
+        return out;
     }
     if let Some(out) = folders::show(ctx, app, d) {
         return out;

@@ -83,11 +83,11 @@ pub(crate) struct JmapJob {
 /// One email as downloaded.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct JEmail {
-    id: String,
-    mailboxes: Vec<String>,
-    keywords: Vec<String>,
-    size: Option<u64>,
-    raw: Option<Vec<u8>>,
+    pub(crate) id: String,
+    pub(crate) mailboxes: Vec<String>,
+    pub(crate) keywords: Vec<String>,
+    pub(crate) size: Option<u64>,
+    pub(crate) raw: Option<Vec<u8>>,
 }
 
 pub(crate) enum JmapEvent {
@@ -460,6 +460,14 @@ const MAX_ROUNDS: usize = 100;
 // Session side: applying results
 // ---------------------------------------------------------------------------------------------------
 
+fn remote_state(s: &mut Session, account: AccountId) -> &mut crate::accounts::JmapState {
+    if s.mailbox.account(account).is_some_and(|a| a.kind == AccountKind::Graph) {
+        prefs(s).graph.entry(account.0).or_default()
+    } else {
+        prefs(s).jmap.entry(account.0).or_default()
+    }
+}
+
 fn folder_of(s: &Session, account: AccountId, mailbox: &str) -> Option<FolderId> {
     s.mailbox
         .folders
@@ -495,6 +503,9 @@ fn apply_keywords(m: &mut MailItem, k: &[String], now: mailcraft_model::DateTime
         }
     }
     apply_server_flags(m, &flags, now);
+    if has("$complete") && !matches!(m.flag, FlagState::Complete { .. }) {
+        m.flag = FlagState::Complete { completed: Some(now) };
+    }
     if !has("$answered") && !has("$forwarded") {
         m.response = mailcraft_model::ResponseState::None;
     }
@@ -578,11 +589,12 @@ fn apply_mailboxes(s: &mut Session, account: AccountId, mut list: Vec<JmapMailbo
         let items = remove_folders(&mut s.mailbox, &remove);
         s.sync.track.removed.extend(items);
     }
-    prefs(s).jmap.entry(account.0).or_default().mailbox_state = state;
+    remote_state(s, account).mailbox_state = state;
 }
 
 fn apply_emails(s: &mut Session, account: AccountId, list: Vec<JEmail>, new_inbox: &mut Vec<ItemId>) {
     let now = s.now();
+    let is_graph = s.mailbox.account(account).is_some_and(|a| a.kind == AccountKind::Graph);
     let inbox = s.mailbox.role_folder(account, FolderRole::Inbox);
     for e in list {
         // The first mailbox (in folder order) the email is in.
@@ -594,11 +606,37 @@ fn apply_emails(s: &mut Session, account: AccountId, list: Vec<JEmail>, new_inbo
         let shadow = JmapShadow { mailbox, keywords: e.keywords.clone() };
         match item_of(s, account, &e.id) {
             Some(id) => {
+                // Preserve changes made after a Graph job was dispatched. The next job sends them.
+                let previous =
+                    is_graph.then(|| remote_state(s, account).shadow.get(&e.id).cloned()).flatten();
+                let pending_folder = previous.as_ref().and_then(|old| {
+                    let local = s.mailbox.mail.get(&id)?;
+                    let remote = s.mailbox.folder(local.folder)?.remote_name.as_deref()?;
+                    (remote != old.mailbox).then_some(local.folder)
+                });
                 if let Some(m) = s.mailbox.mail.get_mut(&id) {
-                    if m.folder != folder {
-                        m.folder = folder;
-                    }
+                    let read = m.read;
+                    let flag = m.flag.clone();
+                    let response = m.response.clone();
+                    let pending_read = previous
+                        .as_ref()
+                        .is_some_and(|old| read != old.keywords.iter().any(|k| k == "$seen"));
+                    let pending_flag = previous.as_ref().is_some_and(|old| {
+                        m.is_flagged() != old.keywords.iter().any(|k| k == "$flagged")
+                            || matches!(m.flag, FlagState::Complete { .. })
+                                != old.keywords.iter().any(|k| k == "$complete")
+                    });
+                    m.folder = pending_folder.unwrap_or(folder);
                     apply_keywords(m, &e.keywords, now);
+                    if pending_read {
+                        m.read = read;
+                    }
+                    if pending_flag {
+                        m.flag = flag;
+                    }
+                    if is_graph {
+                        m.response = response;
+                    }
                     s.sync.track.flags.insert(id);
                 }
             }
@@ -633,7 +671,7 @@ fn apply_emails(s: &mut Session, account: AccountId, list: Vec<JEmail>, new_inbo
                 }
             }
         }
-        prefs(s).jmap.entry(account.0).or_default().shadow.insert(e.id, shadow);
+        remote_state(s, account).shadow.insert(e.id, shadow);
     }
 }
 
@@ -648,17 +686,17 @@ pub(crate) fn apply(s: &mut Session, account: AccountId, ev: JmapEvent, new_inbo
                     s.sync.track.removed.insert(item);
                 }
             }
-            let st = prefs(s).jmap.entry(account.0).or_default();
+            let st = remote_state(s, account);
             for id in ids {
                 st.shadow.remove(&id);
             }
         }
-        JmapEvent::EmailState { state } => prefs(s).jmap.entry(account.0).or_default().email_state = state,
+        JmapEvent::EmailState { state } => remote_state(s, account).email_state = state,
         JmapEvent::Updated { id, shadow } => {
-            prefs(s).jmap.entry(account.0).or_default().shadow.insert(id, shadow);
+            remote_state(s, account).shadow.insert(id, shadow);
         }
         JmapEvent::Destroyed { ids } => {
-            let st = prefs(s).jmap.entry(account.0).or_default();
+            let st = remote_state(s, account);
             for id in ids {
                 st.shadow.remove(&id);
             }
@@ -666,11 +704,11 @@ pub(crate) fn apply(s: &mut Session, account: AccountId, ev: JmapEvent, new_inbo
         JmapEvent::Imported { item, id, shadow } => {
             if let Some(m) = s.mailbox.mail.get_mut(&item) {
                 m.remote_id = Some(id.clone());
-                prefs(s).jmap.entry(account.0).or_default().shadow.insert(id, shadow);
+                remote_state(s, account).shadow.insert(id, shadow);
             }
         }
         JmapEvent::Reset => {
-            let st = prefs(s).jmap.entry(account.0).or_default();
+            let st = remote_state(s, account);
             st.email_state.clear();
         }
     }

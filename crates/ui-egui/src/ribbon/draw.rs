@@ -501,7 +501,7 @@ fn honour_open_request(ui: &Ui, cx: &mut Cx, key: &str, resp: &Response) {
 }
 
 /// A control rendered as a menu entry (Simplified "…" overflow, collapsed groups).
-fn ctl_in_menu(ui: &mut Ui, app: &mut App, cx: &mut Cx, c: &Ctl) {
+pub(super) fn ctl_in_menu(ui: &mut Ui, app: &mut App, cx: &mut Cx, c: &Ctl) {
     let why = ctl_disabled(app, cx, c);
     match c.kind {
         Kind::Button | Kind::Toggle | Kind::Check => {

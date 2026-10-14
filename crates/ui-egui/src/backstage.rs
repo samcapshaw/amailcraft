@@ -589,6 +589,7 @@ fn kind_label(s: &mailcraft_engine::Session, a: &mailcraft_model::Account) -> &'
         mailcraft_model::AccountKind::Imap => "IMAP/SMTP",
         mailcraft_model::AccountKind::Jmap => "JMAP",
         mailcraft_model::AccountKind::Exchange => "Exchange",
+        mailcraft_model::AccountKind::Graph => "Microsoft 365 (Graph)",
     }
 }
 
@@ -1545,7 +1546,6 @@ fn account(ui: &mut Ui, app: &mut App) {
         let b = ui.radio_value(&mut dark, true, "Dark").changed();
         if a || b {
             app.run("options.set", json!({"key": "view.darkMode", "value": dark}));
-            app.theme = crate::theme::Theme::for_dark(dark);
         }
     });
     rule(ui, app);

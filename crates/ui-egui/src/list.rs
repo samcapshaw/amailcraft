@@ -340,6 +340,7 @@ fn fingerprint(s: &Session) -> u64 {
     s.selection.focus.hash(&mut h);
     s.view.focused_tab.hash(&mut h);
     s.view.unified_inbox.hash(&mut h);
+    s.view.unified_sent.hash(&mut h);
     s.view.search.hash(&mut h);
     std::mem::discriminant(&s.view.search_scope).hash(&mut h);
     std::mem::discriminant(&s.view.reading_pane).hash(&mut h);
@@ -386,7 +387,7 @@ fn build(s: &Session, key: u64) -> Cached {
     let focused_tabs = role == Some(FolderRole::Inbox) && vs.focused_inbox && !searching;
     let other_new = if focused_tabs && s.view.focused_tab {
         let new: Vec<_> =
-            (if s.view.unified_inbox { queries::inbox_items(s) } else { s.mailbox.items_in(folder) })
+            (if s.view.unified_inbox { queries::aggregate_items(s) } else { s.mailbox.items_in(folder) })
                 .into_iter()
                 .filter(|m| m.focus == FocusClass::Other && !m.read)
                 .collect();
@@ -621,9 +622,13 @@ pub fn message_list(ui: &mut Ui, app: &mut App, frame: &Frame) {
         ctx.data_mut(|d| d.insert_temp(state_id(), st));
         return;
     }
-    let mode = mode_for(&cached, full.width());
+    let mode = if app.mac_style && cached.vs.layout == ViewLayout::Compact {
+        Mode::Compact
+    } else {
+        mode_for(&cached, full.width())
+    };
     let header_h = (if app.mac_style {
-        84.0 + if matches!(mode, Mode::Columns { .. }) { COLUMN_HEADER } else { 0.0 }
+        132.0 + if matches!(mode, Mode::Columns { .. }) { COLUMN_HEADER } else { 0.0 }
     } else {
         header_height(&cached, mode)
     })
@@ -855,28 +860,29 @@ fn mac_header(ui: &mut Ui, app: &mut App, c: &Cached, rect: Rect, mode: Mode) {
     let th = app.theme.clone();
     let painter = ui.painter_at(rect);
     let folder = if app.s.view.unified_inbox {
-        "All Inboxes"
+        if app.s.view.unified_sent { "All Sent" } else { "All Inboxes" }
     } else {
         app.s.mailbox.folder(app.s.selection.folder).map(|f| f.name.as_str()).unwrap_or("Mail")
     };
-    painter.text(
-        pos2(rect.left() + 16.0, rect.top() + 12.0),
-        egui::Align2::LEFT_TOP,
-        folder,
-        FontId::proportional(18.0),
-        th.text,
-    );
+    Text::new(ui, folder, 27.0, true, th.text, rect.width() - 48.0, 1)
+        .paint(&painter, pos2(rect.left() + 24.0, rect.top() + 22.0));
     let account = app.s.current_account().and_then(|id| app.s.mailbox.account(id));
     let subtitle = if app.s.view.unified_inbox {
-        "Personal, shared, and delegated accounts"
+        let items = queries::aggregate_items(&app.s);
+        if app.s.view.unified_sent {
+            format!("{} messages · {} mailboxes", items.len(), app.s.mailbox.accounts.len())
+        } else {
+            let unread = items.iter().filter(|m| !m.read).count();
+            format!("{unread} unread · {} mailboxes", app.s.mailbox.accounts.len())
+        }
     } else {
         account
-            .map(|a| if a.address.is_empty() { a.display_name.as_str() } else { a.address.as_str() })
-            .unwrap_or("")
+            .map(|a| if a.address.is_empty() { a.display_name.clone() } else { a.address.clone() })
+            .unwrap_or_default()
     };
-    let subtitle = Text::new(ui, subtitle, 10.5, false, th.text_muted, rect.width() - 32.0, 1);
-    subtitle.paint(&painter, pos2(rect.left() + 16.0, rect.top() + 34.0));
-    let y = rect.top() + 54.0;
+    Text::new(ui, &subtitle, 14.0, false, th.text_muted, rect.width() - 48.0, 1)
+        .paint(&painter, pos2(rect.left() + 24.0, rect.top() + 58.0));
+    let y = rect.top() + 91.0;
     let (labels, active) = if c.focused_tabs {
         let other =
             c.other_new.as_ref().map(|(n, _)| format!("Other · {n}")).unwrap_or_else(|| "Other".into());
@@ -884,11 +890,11 @@ fn mac_header(ui: &mut Ui, app: &mut App, c: &Cached, rect: Rect, mode: Mode) {
     } else {
         (["All".into(), "Unread".into()], if c.vs.filter == ListFilter::Unread { 1 } else { 0 })
     };
-    let mut x = rect.left() + 12.0;
+    let mut x = rect.left() + 24.0;
     for (i, label) in labels.iter().enumerate() {
         let on = i == active;
-        let t = Text::new(ui, label, 11.0, false, if on { th.text } else { th.text_muted }, 100.0, 1);
-        let r = Rect::from_min_size(pos2(x, y), vec2(t.width() + 18.0, 23.0));
+        let t = Text::new(ui, label, 13.0, false, if on { th.text } else { th.text_muted }, 100.0, 1);
+        let r = Rect::from_min_size(pos2(x, y), vec2(t.width() + 22.0, 29.0));
         let response = ui.interact(r, Id::new(("mailcraft.list.tab", i)), Sense::click());
         if on || response.hovered() {
             painter.rect_filled(r, 5, if on { th.hover } else { th.group_header });
@@ -919,7 +925,7 @@ fn mac_header(ui: &mut Ui, app: &mut App, c: &Cached, rect: Rect, mode: Mode) {
     }
     let sort = Rect::from_min_size(pos2(rect.right() - 36.0, y), vec2(24.0, 23.0));
     let r = ui.interact(sort, Id::new("mailcraft.list.arrange"), Sense::click());
-    app.icons.paint(ui, icon_rect(sort.center(), 13.0), "sort-down", th.text_muted);
+    app.icons.paint(ui, icon_rect(sort.center(), 16.0), "filter", th.text_muted);
     r.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Sort and filter messages"));
     egui::Popup::menu(&r).show(|ui| crate::menus::arrange_menu(ui, app));
     if let Mode::Columns { .. } = mode {
@@ -1063,9 +1069,19 @@ fn body(ui: &mut Ui, app: &mut App, c: &Cached, rect: Rect, mode: Mode, st: &mut
     }
     bg.widget_info(|| WidgetInfo::labeled(WidgetType::Other, true, "Message list"));
 
-    let item_h = item_height(mode, c.vs.preview_lines, c.vs.tighter_spacing);
+    let item_h = if app.mac_style && matches!(mode, Mode::Compact) {
+        (if c.vs.tighter_spacing {
+            96.0
+        } else if rect.height() > 650.0 {
+            144.0
+        } else {
+            112.0
+        }) + 18.0 * f32::from(c.vs.preview_lines.saturating_sub(1).min(2))
+    } else {
+        item_height(mode, c.vs.preview_lines, c.vs.tighter_spacing)
+    };
     let child_h = child_height(mode, c.vs.preview_lines, c.vs.tighter_spacing);
-    let group_h = if app.mac_style { 20.0 } else { size::GROUP_HEADER };
+    let group_h = if app.mac_style { 30.0 } else { size::GROUP_HEADER };
     let row_h = |r: &ListRow| match r {
         ListRow::Group { .. } => group_h,
         ListRow::Item(it) if it.conversation.as_ref().is_some_and(|c| !c.header) => child_h,
@@ -1245,7 +1261,7 @@ fn group_row(ui: &mut Ui, app: &mut App, r: Rect, label: &str, count: usize, col
     let fill = if resp.hovered() {
         th.hover
     } else if app.mac_style {
-        th.pane
+        th.chrome
     } else {
         th.group_header
     };
@@ -1255,7 +1271,7 @@ fn group_row(ui: &mut Ui, app: &mut App, r: Rect, label: &str, count: usize, col
     let t = Text::new(
         ui,
         label,
-        if app.mac_style { 10.5 } else { 12.5 },
+        if app.mac_style { 12.0 } else { 12.5 },
         !app.mac_style,
         if app.mac_style { th.text_muted } else { th.text },
         (r.width() - 40.0).max(1.0),
@@ -1441,14 +1457,14 @@ fn item_row(
     let painter = ui.painter().clone();
     let conv = row.conversation.as_ref();
     let header_of_selection = conv.is_some_and(|c| c.header && c.contains_selection);
-    let fill = row_fill(&th, row, hovered, header_of_selection, c.highlight_flagged);
+    let fill = row_fill(&th, row, hovered, header_of_selection, c.highlight_flagged && !app.mac_style);
     if let Some(fill) = fill {
         painter.rect_filled(r, 0.0, fill);
     }
     if row.unread {
         let bar = Rect::from_min_size(r.min + vec2(0.0, 1.0), vec2(size::UNREAD_BAR, r.height() - 2.0));
         if app.mac_style {
-            painter.circle_filled(pos2(r.left() + 9.0, r.top() + 21.0), 3.0, th.accent);
+            painter.circle_filled(pos2(r.left() + 26.0, r.top() + 27.0), 3.2, th.accent);
         } else {
             painter.rect_filled(bar, 0.0, th.unread);
         }
@@ -1617,7 +1633,7 @@ fn paint_conversation_header(
     tighter: bool,
 ) -> (Slots, Option<Rect>) {
     let mut shown = row.clone();
-    if cv.unread > 0 {
+    if cv.unread > 0 && !app.mac_style {
         shown.subject = format!("{} ({})", row.subject, cv.unread);
     }
     if !cv.senders_above_subject {
@@ -1759,6 +1775,9 @@ fn paint_compact(
     tighter: bool,
     extra_left: f32,
 ) -> Slots {
+    if app.mac_style {
+        return paint_mac_compact(ui, app, c, r, row, hovered, preview_lines, extra_left);
+    }
     let th = app.theme.clone();
     let painter = ui.painter().clone();
     let pad = if tighter {
@@ -1858,6 +1877,94 @@ fn paint_compact(
         );
         t.paint(&painter, pos2(left, line2.bottom() + 1.0));
     }
+    slots
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_mac_compact(
+    ui: &Ui,
+    app: &mut App,
+    c: &Cached,
+    r: Rect,
+    row: &ItemRow,
+    hovered: bool,
+    preview_lines: u8,
+    extra_left: f32,
+) -> Slots {
+    let th = app.theme.clone();
+    let painter = ui.painter();
+    let left = r.left() + 24.0 + extra_left;
+    let right = r.right() - 24.0;
+    let line = Rect::from_min_max(pos2(left, r.top() + 14.0), pos2(right, r.top() + 38.0));
+    let (slots, end) = paint_row_end(ui, app, c, row, line, right, hovered);
+    let time = Text::new(ui, &row.time, 12.0, false, th.text_muted, 100.0, 1);
+    let sender_right = time.paint_right(painter, line, end - 6.0) - 12.0;
+    let sender_x = left + if row.unread { 16.0 } else { 0.0 };
+    let look = Look::of(&row.style);
+    let searching = !app.s.view.search.trim().is_empty() && crate::dialogs::search_highlight_on(&app.s);
+    let hl = |field: Field| searching.then_some((&app.s, field, th.search_hit));
+    Text::styled(
+        ui,
+        &row.who,
+        18.0,
+        Look { bold: true, ..look },
+        rule_color(&row.style, th.text),
+        (sender_right - sender_x).max(20.0),
+        1,
+        hl(Field::From),
+    )
+    .paint_left(painter, line, sender_x);
+    Text::styled(
+        ui,
+        &row.subject,
+        17.0,
+        look,
+        rule_color(&row.style, th.text),
+        (right - left).max(20.0),
+        1,
+        hl(Field::Subject),
+    )
+    .paint(painter, pos2(left, r.top() + 43.0));
+    if preview_lines > 0 {
+        Text::highlighted(
+            ui,
+            row.preview.trim(),
+            15.0,
+            false,
+            th.text_muted,
+            (right - left).max(20.0),
+            usize::from(preview_lines.min(3)),
+            hl(Field::Body),
+        )
+        .paint(painter, pos2(left, r.top() + 67.0));
+    }
+    let account = app
+        .s
+        .mailbox
+        .mail
+        .get(&row.id)
+        .and_then(|m| app.s.mailbox.folder_account(m.folder))
+        .and_then(|a| app.s.mailbox.account(a));
+    let source = account
+        .map(|a| if a.linked_mailbox.is_some() { a.display_name.as_str() } else { "Personal" })
+        .unwrap_or("Mailbox");
+    let mut meta = source.to_owned();
+    if let Some(cv) = &row.conversation
+        && cv.count > 1
+    {
+        meta.push_str(&format!(" · {} messages", cv.count));
+    }
+    if row.flagged {
+        meta.push_str(" · Flagged");
+    }
+    let linked = account.is_some_and(|a| a.linked_mailbox.is_some());
+    let mut meta_left = left;
+    if linked {
+        app.icons.paint(ui, icon_rect(pos2(left + 7.0, r.bottom() - 16.0), 14.0), "people", th.text_muted);
+        meta_left += 22.0;
+    }
+    Text::new(ui, &meta, 12.5, false, th.text_muted, (right - meta_left).max(20.0), 1)
+        .paint(painter, pos2(meta_left, r.bottom() - 23.0));
     slots
 }
 

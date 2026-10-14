@@ -1243,4 +1243,84 @@ fn mac_compose_shows_sender_and_keeps_advanced_formatting_optional() {
     h.get_by_role_and_label(Role::TextInput, "Subject").type_text("A clearer compose window");
     h.run();
     assert_eq!(compose(&h, cid).subject, "A clearer compose window");
+    h.get_by_role_and_label(Role::TextInput, "To").click();
+    h.run();
+    h.get_by_role_and_label(Role::TextInput, "To").type_text("alex@example.net");
+    h.run();
+    h.get_by_label(BODY_LABEL).click();
+    h.run();
+    h.get_by_label(BODY_LABEL).type_text("A considered writing experience.");
+    h.run();
+    h.get_by_label("More").click();
+    h.run();
+    h.get_by_label("Show Bcc").click();
+    h.run();
+    assert!(h.query_by_role_and_label(Role::TextInput, "Bcc").is_some());
+    assert_eq!(compose(&h, cid).to, "alex@example.net");
+    assert!(compose(&h, cid).body.to_plain_text().contains("A considered writing experience."));
+    h.get_by_label("More").click();
+    h.run();
+    h.get_by_label("Save draft").click();
+    h.run();
+    assert!(!compose(&h, cid).dirty);
+}
+
+#[test]
+fn mac_signature_picker_replaces_and_removes_the_signature_without_losing_message_text() {
+    let (mut app, cid) = app_with_compose(true);
+    app.enable_mac_style();
+    app.s
+        .mailbox
+        .add_signature("Work", mailcraft_model::Doc::from_plain_text("Jordan | Design team"))
+        .unwrap();
+    app.s.mailbox.add_signature("Personal", mailcraft_model::Doc::from_plain_text("Best, Jordan")).unwrap();
+    app.run("compose.insertText", json!({"compose":cid,"text":"Keep this message."}));
+    let mut h = inline_harness(app, cid);
+    h.run();
+    for name in ["Work", "Personal", "None"] {
+        h.get_by_role_and_label(Role::ComboBox, "Signature").click();
+        h.run();
+        h.get_by_label(name).click();
+        h.run();
+        let c = compose(&h, cid);
+        assert!(c.body.to_plain_text().contains("Keep this message."));
+        if name == "None" {
+            assert!(c.signature.is_none());
+        } else {
+            assert_eq!(c.signature.as_ref().map(|s| s.name.as_str()), Some(name));
+        }
+        assert!(!c.body.to_plain_text().contains("Jordan | Design team") || name == "Work");
+    }
+    assert!(h.query_by_label("Bold").is_none());
+    h.get_by_label("Formatting").click();
+    h.run();
+    assert!(h.query_by_label("Bold").is_some());
+    assert!(h.query_by_label("Message").is_none(), "Mac formatting must not expand the ribbon tabs");
+    h.get_by_label("Bold").click();
+    h.run();
+    assert_eq!(compose(&h, cid).style_at_caret().bold, Some(true));
+    h.get_by_role_and_label(Role::ComboBox, "Signature").click();
+    h.run();
+    h.get_by_label("Edit signatures…").click();
+    h.run();
+    assert!(h.state().ui.dialogs.iter().any(|(name, params)| name == "signatures"
+        && params.get("compose").and_then(serde_json::Value::as_u64) == Some(cid)));
+}
+
+#[test]
+fn mac_compose_dialogs_stay_with_their_window_and_embedded_composers_keep_the_root() {
+    let (mut app, cid) = app_with_compose(false);
+    app.enable_mac_style();
+    let ctx = egui::Context::default();
+    let params = json!({"compose":cid});
+    ctx.set_embed_viewports(false);
+    assert_eq!(crate::dialogs::dialog_viewport(&ctx, &app, &params), viewport_id(cid));
+    assert_eq!(crate::dialogs::dialog_viewport(&ctx, &app, &json!({})), ViewportId::ROOT);
+    ctx.set_embed_viewports(true);
+    assert_eq!(crate::dialogs::dialog_viewport(&ctx, &app, &params), ViewportId::ROOT);
+    ctx.set_embed_viewports(false);
+    if let Some(c) = app.s.composes.get_mut(&cid) {
+        c.inline = true;
+    }
+    assert_eq!(crate::dialogs::dialog_viewport(&ctx, &app, &params), ViewportId::ROOT);
 }

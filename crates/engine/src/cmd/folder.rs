@@ -442,11 +442,24 @@ fn deleted_has_content(s: &Session) -> Option<&'static str> {
 // ---------------------------------------------------------------------------------------------------------
 // Create / rename / copy / move / delete
 
+fn require_folder_writes(s: &Session, id: FolderId) -> Result<(), CmdError> {
+    if s.mailbox.folder(id).is_some_and(|f| {
+        f.kind == FolderKind::Mail
+            && s.mailbox.account(f.account).is_some_and(|a| a.kind == mailcraft_model::AccountKind::Graph)
+    }) {
+        return Err(CmdError::Disabled(
+            "Microsoft Graph folder creation, rename, move and deletion are not implemented yet.".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn new_folder(s: &mut Session, p: &Value) -> CmdResult {
     let parent = match param_folder(s, p, "parent")? {
         Some(f) => f,
         None => current_folder(s, &Value::Null)?,
     };
+    require_folder_writes(s, parent)?;
     let Some(name) = opt_str(p, "name") else {
         let path = s.mailbox.folder_path(parent);
         return Ok(dialog(s, "createFolder", json!({ "parent": parent.0, "path": path })));
@@ -460,6 +473,7 @@ fn new_folder(s: &mut Session, p: &Value) -> CmdResult {
 
 fn rename(s: &mut Session, p: &Value) -> CmdResult {
     let id = current_folder(s, p)?;
+    require_folder_writes(s, id)?;
     let Some(name) = opt_str(p, "name") else {
         let current = s.mailbox.folder(id).map(|f| f.name.clone()).unwrap_or_default();
         return Ok(dialog(s, "renameFolder", json!({ "folder": id.0, "name": current })));
@@ -516,6 +530,7 @@ pub fn copy_folder_tree(
                 manual_pos: if is_root { None } else { of.manual_pos },
                 search_query: of.search_query.clone(),
                 remote_name: None,
+                graph_source: None,
             },
         );
         if let Some(v) = mb.views.get(old).cloned() {
@@ -555,9 +570,11 @@ pub fn copy_folder_tree(
 
 fn copy(s: &mut Session, p: &Value) -> CmdResult {
     let id = current_folder(s, p)?;
+    require_folder_writes(s, id)?;
     let Some(parent) = param_folder(s, p, "parent")? else {
         return Ok(dialog(s, "copyFolder", json!({ "folder": id.0, "path": s.mailbox.folder_path(id) })));
     };
+    require_folder_writes(s, parent)?;
     let (root, folders, items) = copy_folder_tree(&mut s.mailbox, id, parent)?;
     if let Some(f) = s.mailbox.folders.get_mut(&parent) {
         f.expanded = true;
@@ -567,9 +584,11 @@ fn copy(s: &mut Session, p: &Value) -> CmdResult {
 
 fn move_(s: &mut Session, p: &Value) -> CmdResult {
     let id = current_folder(s, p)?;
+    require_folder_writes(s, id)?;
     let Some(parent) = param_folder(s, p, "parent")? else {
         return Ok(dialog(s, "moveFolder", json!({ "folder": id.0, "path": s.mailbox.folder_path(id) })));
     };
+    require_folder_writes(s, parent)?;
     s.mailbox.move_folder(id, parent)?;
     if let Some(f) = s.mailbox.folders.get_mut(&parent) {
         f.expanded = true;
@@ -579,6 +598,7 @@ fn move_(s: &mut Session, p: &Value) -> CmdResult {
 
 fn delete(s: &mut Session, p: &Value) -> CmdResult {
     let id = current_folder(s, p)?;
+    require_folder_writes(s, id)?;
     let parent = s.mailbox.folder(id).and_then(|f| f.parent);
     s.mailbox.delete_folder(id)?;
     let permanent = !s.mailbox.folders.contains_key(&id);
@@ -1082,6 +1102,7 @@ fn properties(s: &mut Session, p: &Value) -> CmdResult {
                     mailcraft_model::calendar::CalendarSource::Local => "local",
                     mailcraft_model::calendar::CalendarSource::Internet => "internet",
                     mailcraft_model::calendar::CalendarSource::File => "file",
+                    mailcraft_model::calendar::CalendarSource::Microsoft365 => "Microsoft 365",
                 };
                 o.insert(
                     "calendar".into(),

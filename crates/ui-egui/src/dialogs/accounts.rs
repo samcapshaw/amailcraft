@@ -55,6 +55,7 @@ pub(crate) fn kind_label(k: AccountKind) -> &'static str {
         AccountKind::Imap => "IMAP/SMTP",
         AccountKind::Jmap => "JMAP",
         AccountKind::Exchange => "Exchange",
+        AccountKind::Graph => "Microsoft 365 (Graph)",
     }
 }
 
@@ -200,9 +201,9 @@ fn mac_accounts(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                             ui.label(RichText::new(&a.address).size(12.0).color(app.theme.text_muted));
                             ui.add_space(20.0);
                             egui::Frame::new()
-                                .fill(app.theme.group_header)
+                                .fill(app.theme.card_surface())
                                 .stroke(egui::Stroke::new(0.5, app.theme.separator))
-                                .corner_radius(8)
+                                .corner_radius(10)
                                 .inner_margin(16)
                                 .show(ui, |ui| {
                                     ui.vertical(|ui| {
@@ -612,6 +613,10 @@ struct Wizard {
     finished: bool,
     manual: bool,
     jmap: bool,
+    graph: bool,
+    graph_calendars: bool,
+    graph_contacts: bool,
+    graph_editing: bool,
     /// Incoming mail over POP3.
     pop3: bool,
     receive_only: bool,
@@ -783,7 +788,9 @@ impl Wizard {
     }
 
     fn kind_name(&self) -> &'static str {
-        if self.jmap {
+        if self.graph {
+            "Microsoft 365 (Graph)"
+        } else if self.jmap {
             "JMAP"
         } else if self.pop3 {
             "POP"
@@ -797,8 +804,16 @@ impl Wizard {
     fn fill_from(&mut self, app: &App, a: &Account) {
         self.receive_only = a.linked_mailbox.as_ref().is_some_and(|l| !l.send_as);
         self.jmap = a.kind == AccountKind::Jmap;
+        self.graph = a.kind == AccountKind::Graph;
+        let opts = mailcraft_engine::accounts::account_options(&app.s, a.id);
+        self.graph_calendars = opts.graph_calendars;
+        self.graph_contacts = opts.graph_contacts;
+        self.graph_editing = opts.graph_editing;
         self.pop3 = mailcraft_engine::accounts::kind_label(&app.s, a) == "pop3";
         self.extra = Extra::from_options(&mailcraft_engine::accounts::account_options(&app.s, a.id));
+        if self.graph {
+            self.extra.oauth_open = true;
+        }
         self.address.clone_from(&a.address);
         self.name.clone_from(&a.sender_name);
         self.account_name.clone_from(&a.display_name);
@@ -830,7 +845,7 @@ impl Wizard {
 
     /// A server is set to encryption None (JMAP: an `http:` session URL).
     fn unencrypted(&self) -> bool {
-        if self.jmap {
+        if self.jmap || self.graph {
             return self.in_host.trim().to_ascii_lowercase().starts_with("http:");
         }
         security_name(self.in_sec) == "none" || security_name(self.out_sec) == "none"
@@ -839,7 +854,7 @@ impl Wizard {
     fn settings_ok(&self) -> bool {
         self.address_ok()
             && !self.in_host.trim().is_empty()
-            && (self.jmap || self.receive_only || !self.out_host.trim().is_empty())
+            && (self.jmap || self.graph || self.receive_only || !self.out_host.trim().is_empty())
             && (self.change.is_some()
                 || self.created.is_some()
                 || !self.password.is_empty()
@@ -849,6 +864,11 @@ impl Wizard {
     /// The More Settings options as command params.
     fn option_params(&self, o: &mut serde_json::Map<String, Value>) {
         let e = &self.extra;
+        if self.graph {
+            o.insert("graphCalendars".into(), json!(self.graph_calendars));
+            o.insert("graphContacts".into(), json!(self.graph_contacts));
+            o.insert("graphEditing".into(), json!(self.graph_editing));
+        }
         o.insert("mode".into(), json!(DOWNLOAD.get(e.download).map_or("full", |d| d.1)));
         o.insert("slowHeadersOnly".into(), json!(e.slow_headers_only));
         if !self.pop3 {
@@ -874,7 +894,7 @@ impl Wizard {
     fn params(&self, account: Option<u32>) -> Value {
         let user = if self.in_user.trim().is_empty() { self.address.trim() } else { self.in_user.trim() };
         let mut p = json!({
-            "kind": if self.jmap { "jmap" } else if self.pop3 { "pop3" } else { "imap" },
+            "kind": if self.graph { "graph" } else if self.jmap { "jmap" } else if self.pop3 { "pop3" } else { "imap" },
             "address": self.address.trim(),
             "senderName": self.name.trim(),
             "incoming": {
@@ -892,7 +912,7 @@ impl Wizard {
         }
         if self.receive_only {
             o.insert("outgoing".into(), Value::Null);
-        } else if !self.jmap {
+        } else if !self.jmap && !self.graph {
             let out_user = if self.out_separate && !self.out_user.trim().is_empty() {
                 self.out_user.trim()
             } else {
@@ -909,7 +929,7 @@ impl Wizard {
                 }),
             );
         }
-        if !self.password.is_empty() {
+        if !self.graph && !self.password.is_empty() {
             o.insert("password".into(), json!(self.password));
         }
         if self.out_separate && !self.out_password.is_empty() {
@@ -996,6 +1016,22 @@ fn wizard(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
     out
 }
 
+fn choose_graph(st: &mut Wizard) {
+    st.graph = true;
+    st.jmap = false;
+    st.pop3 = false;
+    st.in_host = "https://graph.microsoft.com/v1.0".into();
+    st.in_port = 443;
+    st.in_sec = sec_index(Security::Tls);
+    st.extra.oauth_open = true;
+    st.extra.push = false;
+    st.extra.interval_own = true;
+    st.extra.interval = 2;
+    st.extra.device = true;
+    st.extra.providers.clear();
+    st.page = PAGE_SETTINGS;
+}
+
 fn page_email(ui: &mut Ui, app: &mut App, st: &mut Wizard) -> Out {
     heading(ui, app, "Add an email account");
     if st.discovering {
@@ -1021,6 +1057,10 @@ fn page_email(ui: &mut Ui, app: &mut App, st: &mut Wizard) -> Out {
     footer(ui, |ui| {
         if btn(ui, "Cancel") {
             return Out::Close;
+        }
+        if btn_en(ui, ok, "Microsoft 365…") {
+            choose_graph(st);
+            return Out::Keep;
         }
         if primary(ui, app, ok, "Connect") || (ok && enter) {
             st.error.clear();
@@ -1110,7 +1150,11 @@ fn page_type(ui: &mut Ui, app: &mut App, st: &mut Wizard) -> Out {
             }
         }
     });
+    if ui.button("Microsoft 365 (Graph)").clicked() {
+        choose_graph(st);
+    }
     if let Some((jmap, pop3)) = pick {
+        st.graph = false;
         st.jmap = jmap;
         st.pop3 = pop3;
         st.guess();
@@ -1162,7 +1206,32 @@ fn page_settings(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Out {
             );
         }
     }
-    egui::ScrollArea::vertical().id_salt(("mc-wiz-settings", uid)).max_height(420.0).show(ui, |ui| {
+    egui::ScrollArea::vertical().id_salt(("mc-wiz-settings", uid)).max_height(if st.graph {(ui.ctx().content_rect().height()-280.0).clamp(300.0,640.0)} else {420.0}).show(ui, |ui| {
+        if st.graph {
+            heading(ui, app, "Microsoft 365");
+            ui.label("Mail through Microsoft Graph. IMAP and SMTP are not required.");
+            muted(ui, app, "Your organization controls mailbox access and sending permissions.");
+            ui.add_space(10.0);
+            ui.label("Connected services");
+            let calendars = ui.checkbox(&mut st.graph_calendars, "Show Microsoft 365 calendars");
+            let contacts = ui.checkbox(&mut st.graph_contacts, "Show Microsoft 365 contacts");
+            let editing=ui.checkbox(&mut st.graph_editing,"Allow editing and meeting responses");
+            if calendars.changed() || contacts.changed() || editing.changed() {
+                st.extra.providers.clear();
+                if st.graph_calendars || st.graph_contacts {
+                    st.extra.provider = 0;
+                }
+            }
+            muted(ui, app, "Available offline. Calendars cover the past 90 days and the coming year; contacts sync the default address book. Editing requires a separate write grant and server permission.");
+            if st.graph_calendars || st.graph_contacts {
+                muted(ui, app, "Choose the mail, calendars and contacts provider below and sign in again to grant access. Turning a service off pauses updates and keeps its offline copy.");
+            }
+            if let Some(url) = oauth_section(ui, app, st, uid) {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+            }
+            return;
+        }
+
         if st.change.is_some() {
             common::heading(ui, app, "Account");
             egui::Grid::new(("mc-wiz-acct", uid)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
@@ -1316,7 +1385,7 @@ fn oauth_section(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Optio
     if let Some(link) = st.change.and_then(|id| account_of(app, id)).and_then(|a| a.linked_mailbox) {
         ui.label(format!("Sign in as {} to open this mailbox.", link.principal_address));
     }
-    let r = egui::CollapsingHeader::new("Sign in with OAuth 2.0 instead of a password")
+    let r = egui::CollapsingHeader::new(if st.graph { "Sign in to Microsoft 365" } else { "Sign in with OAuth 2.0 instead of a password" })
         .id_salt(("mc-wiz-oauth", uid))
         .open(if st.extra.oauth_open { Some(true) } else { None })
         .show(ui, |ui| {
@@ -1329,7 +1398,9 @@ fn oauth_section(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Optio
                         a.iter()
                             .filter_map(|p| {
                                 let device = p.get("flows").and_then(Value::as_array).is_some_and(|f| f.iter().any(|x| x == "device"));
-                                Some((p.get("id")?.as_str()?.to_owned(), p.get("name")?.as_str()?.to_owned(), device))
+                                let id = p.get("id")?.as_str()?;
+                                if st.graph != id.starts_with("microsoft-graph") { return None; }
+                                Some((id.to_owned(), p.get("name")?.as_str()?.to_owned(), device))
                             })
                             .collect()
                     })
@@ -1340,10 +1411,11 @@ fn oauth_section(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Optio
                 // Restore the configured provider before guessing from the mailbox's domain.
                 let saved_provider = st.change.and_then(|id| account_of(app, id))
                     .and_then(|a| mailcraft_engine::accounts::account_options(&app.s, a.id).oauth)
-                    .map(|b| b.provider);
+                    .map(|b| b.provider)
+                    .filter(|id| !st.graph || if st.graph_editing {id=="microsoft-graph-pim-write"} else { !(st.graph_calendars || st.graph_contacts) || id!="microsoft-graph" });
                 let domain = st.domain();
                 if let Some(i) = v.iter().position(|(id, _, _)| Some(id) == saved_provider.as_ref()).or_else(|| v.iter().position(|(id, _, _)| {
-                    (id == "google" && (domain == "gmail.com" || domain == "googlemail.com"))
+                    (st.graph && id == if st.graph_editing {"microsoft-graph-pim-write"} else if st.graph_calendars || st.graph_contacts { "microsoft-graph-pim" } else { "microsoft-graph" }) || (id == "google" && (domain == "gmail.com" || domain == "googlemail.com"))
                         || (id == "microsoft" && ["outlook.com", "hotmail.com", "live.com", "msn.com"].contains(&domain.as_str()))
                 })) {
                     st.extra.provider = i;
@@ -1353,7 +1425,7 @@ fn oauth_section(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Optio
             muted(
                 ui,
                 app,
-                "MailCraft has no built-in registration with any provider. Register an application with your provider and enter its client id (and client secret, if the provider issued one).",
+                if st.graph { "Use a public-client app registration from your organization. Enter its client ID." } else { "MailCraft has no built-in registration with any provider. Register an application with your provider and enter its client id (and client secret, if the provider issued one)." },
             );
             let e = &mut st.extra;
             egui::Grid::new(("mc-wiz-oauth-grid", uid)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
@@ -1363,7 +1435,7 @@ fn oauth_section(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Optio
                 let _ = r.response.labelled_by(l.id);
                 ui.end_row();
                 grid_edit(ui, "Client id:", &mut e.client_id, "From your app registration", false);
-                grid_edit(ui, "Client secret:", &mut e.client_secret, "Only if the provider issued one", true);
+                if !st.graph { grid_edit(ui, "Client secret:", &mut e.client_secret, "Only if the provider issued one", true); }
             });
             let device_ok = e.providers.get(e.provider).is_some_and(|p| p.2);
             if !device_ok {
@@ -1624,7 +1696,9 @@ fn test_rows(
     error: &str,
 ) -> Vec<(String, &'static str, String)> {
     let jmap = acct.is_some_and(|a| a.kind == AccountKind::Jmap);
-    let incoming = if jmap {
+    let incoming = if acct.is_some_and(|a| a.kind == AccountKind::Graph) {
+        "Sign in to Microsoft 365 (Graph)".to_owned()
+    } else if jmap {
         "Sign in to the JMAP server".to_owned()
     } else {
         "Log onto incoming mail server (IMAP)".to_owned()
@@ -1861,7 +1935,7 @@ fn shared_mailbox(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                     .accounts
                     .iter()
                     .filter(|a| {
-                        a.kind == AccountKind::Imap
+                        matches!(a.kind, AccountKind::Imap | AccountKind::Graph)
                             && a.credential == mailcraft_model::account::CredentialKind::OAuthToken
                             && a.linked_mailbox.is_none()
                     })
@@ -1879,7 +1953,11 @@ fn shared_mailbox(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                     }
                 });
                 if accounts.is_empty() {
-                    muted(ui, app, "Add your personal Microsoft 365 IMAP account and configure OAuth first.");
+                    muted(
+                        ui,
+                        app,
+                        "Add your personal Microsoft 365 Graph or IMAP account and configure OAuth first.",
+                    );
                 }
                 ui.add_space(12.0);
                 let label = ui.label("Mailbox address");
@@ -1901,11 +1979,20 @@ fn shared_mailbox(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                     ui.selectable_value(&mut st.delegated, false, "Shared mailbox");
                     ui.selectable_value(&mut st.delegated, true, "Delegated mailbox");
                 });
-                ui.checkbox(&mut st.send_as, "Send as this mailbox");
+                let graph =
+                    st.owner.and_then(|id| account_of(app, id)).is_some_and(|a| a.kind == AccountKind::Graph);
+                ui.checkbox(
+                    &mut st.send_as,
+                    if graph { "Allow sending from this mailbox" } else { "Send as this mailbox" },
+                );
                 muted(
                     ui,
                     app,
-                    "Your administrator must have granted mailbox access and, if selected, Send As. This setup does not grant permissions. IMAP and SMTP must be enabled by your organization.",
+                    if graph {
+                        "Your organization must grant mailbox access. Sending follows its Send As or Send on Behalf permissions; this setup does not grant them."
+                    } else {
+                        "Your administrator must have granted mailbox access and, if selected, Send As. This setup does not grant permissions. IMAP and SMTP must be enabled by your organization."
+                    },
                 );
                 ui.add_space(8.0);
                 muted(
@@ -1937,6 +2024,22 @@ fn shared_mailbox(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
 #[cfg(test)]
 mod shared_wizard_tests {
     use super::*;
+    #[test]
+    fn graph_setup_has_no_password_or_smtp_and_preserves_linked_transport() {
+        let mut wizard = Wizard { address: "owner@example.net".into(), ..Default::default() };
+        choose_graph(&mut wizard);
+        assert!(wizard.settings_ok());
+        wizard.graph_calendars = true;
+        wizard.graph_contacts = true;
+        let params = wizard.params(None);
+        assert_eq!(params["graphCalendars"], true);
+        assert_eq!(params["graphContacts"], true);
+        assert_eq!(params["kind"], "graph");
+        assert_eq!(params["incoming"]["port"], 443);
+        assert!(params.get("outgoing").is_none());
+        assert!(params.get("password").is_none());
+    }
+
     #[test]
     fn receive_only_setup_can_save_without_smtp() {
         let mut app = App::new(mailcraft_engine::sample::sample_session());

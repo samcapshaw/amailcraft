@@ -647,31 +647,39 @@ fn message_view(ui: &mut Ui, app: &mut App, id: u64, surface: Surface, narrow: b
         area = area.vertical_scroll_offset(y);
     }
     let shown = area.show(ui, |ui| {
-        ui.add_space(12.0);
-        egui::Frame::new().inner_margin(egui::Margin::symmetric(PAD as i8, 0)).show(ui, |ui| {
-            header(ui, app, &h, id, narrow, in_window);
-            if cache.remote_images && !allow_remote {
-                pictures_bar(ui, app, id);
-            }
-        });
-        ui.add_space(10.0);
-        egui::Frame::new().inner_margin(egui::Margin::symmetric(PAD as i8, 0)).show(ui, |ui| {
-            let opts = BodyOptions {
-                dark,
-                zoom,
-                allow_remote,
-                paint_background: true,
-                doc_key: Some(cache.doc_key),
-            };
-            let doc = Arc::clone(&cache.doc);
-            clicked_link = body::show_doc_with(ui, &mut cache.view, &doc, &opts);
-            if reveal
-                && let Some(h) = bar.hits.get(bar.current)
-                && let Some(r) = body::range_rect(&cache.view, h)
-            {
-                ui.scroll_to_rect(r.expand(24.0), Some(Align::Center));
-            }
-        });
+        ui.add_space(if app.mac_style { 24.0 } else { 12.0 });
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(if app.mac_style { 28 } else { PAD as i8 }, 0))
+            .show(ui, |ui| {
+                header(ui, app, &h, id, narrow, in_window);
+                if cache.remote_images && !allow_remote {
+                    pictures_bar(ui, app, id);
+                }
+            });
+        ui.add_space(if app.mac_style { 22.0 } else { 10.0 });
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(if app.mac_style { 28 } else { PAD as i8 }, 0))
+            .show(ui, |ui| {
+                let opts = BodyOptions {
+                    dark,
+                    palette: ((app.theme.mac_style || app.theme.custom_surfaces)
+                        && !tg.light_bg.contains(&id)
+                        && !app.s.settings.bool("general.keepMessageBackground"))
+                    .then_some((app.theme.reading, app.theme.text)),
+                    zoom,
+                    allow_remote,
+                    paint_background: true,
+                    doc_key: Some(cache.doc_key),
+                };
+                let doc = Arc::clone(&cache.doc);
+                clicked_link = body::show_doc_with(ui, &mut cache.view, &doc, &opts);
+                if reveal
+                    && let Some(h) = bar.hits.get(bar.current)
+                    && let Some(r) = body::range_rect(&cache.view, h)
+                {
+                    ui.scroll_to_rect(r.expand(24.0), Some(Align::Center));
+                }
+            });
         ui.add_space(PAD);
     });
     if surface == Surface::Main {
@@ -698,9 +706,45 @@ fn message_view(ui: &mut Ui, app: &mut App, id: u64, surface: Surface, narrow: b
 
 fn header(ui: &mut Ui, app: &mut App, h: &ReadingHeader, id: u64, narrow: bool, in_window: bool) {
     let theme = app.theme.clone();
+    if app.mac_style {
+        let account = app
+            .s
+            .mailbox
+            .mail
+            .get(&ItemId(id))
+            .and_then(|m| app.s.mailbox.folder_account(m.folder))
+            .and_then(|a| app.s.mailbox.account(a));
+        let linked = account.is_some_and(|a| a.linked_mailbox.is_some());
+        let context = account
+            .map(|a| {
+                if a.linked_mailbox.is_some() {
+                    format!("{} mailbox", a.display_name)
+                } else {
+                    "Personal mailbox".to_owned()
+                }
+            })
+            .unwrap_or_else(|| "Mailbox".to_owned());
+        ui.horizontal(|ui| {
+            let (icon, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+            app.icons.paint(ui, icon, if linked { "people" } else { "mail" }, theme.text_muted);
+            ui.label(RichText::new(context).size(12.0).color(theme.text_muted));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if !h.categories.is_empty() {
+                    ui.label(RichText::new(h.categories.join(" · ")).size(12.0).color(theme.text_muted));
+                }
+            });
+        });
+        ui.add_space(20.0);
+    }
     // 1. Subject.
     let subject = if h.subject.trim().is_empty() { "(no subject)" } else { h.subject.as_str() };
-    let subject_size = if in_window { 18.0 } else { 20.0 };
+    let subject_size = if app.mac_style {
+        26.0
+    } else if in_window {
+        18.0
+    } else {
+        20.0
+    };
     // Search words in the subject on the highlight background (File › Options › Search).
     let hits = if app.s.settings.bool("search.highlight") {
         mailcraft_engine::search_index::highlights(
@@ -726,12 +770,18 @@ fn header(ui: &mut Ui, app: &mut App, h: &ReadingHeader, id: u64, narrow: bool, 
 
     // 2. Persona + addresses (left) and actions + date (right).
     let full = ui.available_rect_before_wrap();
-    let right_w: f32 = if narrow { 150.0 } else { 300.0 };
+    let right_w: f32 = if app.mac_style {
+        180.0
+    } else if narrow {
+        150.0
+    } else {
+        300.0
+    };
     let right_w = right_w.min(full.width() * 0.6);
     let right_rect =
         Rect::from_min_size(Pos2::new(full.right() - right_w, full.top()), Vec2::new(right_w, 80.0));
     let mut right = ui.new_child(UiBuilder::new().max_rect(right_rect).layout(Layout::top_down(Align::Max)));
-    actions(&mut right, app, id, narrow, in_window);
+    actions(&mut right, app, id, narrow || app.mac_style, in_window);
     let date = if narrow { short_date(&h.date) } else { h.date.clone() };
     if !date.is_empty() {
         right.add_space(4.0);
@@ -741,23 +791,47 @@ fn header(ui: &mut Ui, app: &mut App, h: &ReadingHeader, id: u64, narrow: bool, 
 
     let left_w = (full.width() - right_w - 8.0).max(60.0);
     ui.allocate_ui_with_layout(Vec2::new(left_w, 0.0), Layout::left_to_right(Align::Min), |ui| {
-        let d = if in_window { 48.0 } else { 40.0 };
+        let d = if in_window {
+            48.0
+        } else if app.mac_style {
+            44.0
+        } else {
+            40.0
+        };
         let (r, _) = ui.allocate_exact_size(Vec2::splat(d), Sense::hover());
         let c = r.center();
-        ui.painter().circle_filled(c, d / 2.0, persona_color(h.persona_color));
+        ui.painter().circle_filled(
+            c,
+            d / 2.0,
+            if app.mac_style { theme.chrome } else { persona_color(h.persona_color) },
+        );
         ui.painter().text(
             c,
             egui::Align2::CENTER_CENTER,
             &h.from_initials,
             FontId::proportional(d * 0.36),
-            Color32::WHITE,
+            if app.mac_style { theme.text } else { Color32::WHITE },
         );
         ui.add_space(10.0);
         ui.vertical(|ui| {
             ui.set_max_width((left_w - d - 12.0).max(40.0));
             ui.spacing_mut().item_spacing.y = 2.0;
-            let from = if h.from.is_empty() { "(unknown sender)" } else { h.from.as_str() };
-            ui.add(egui::Label::new(RichText::new(from).size(14.0).strong().color(theme.text)).truncate());
+            let from = if h.from.is_empty() {
+                "(unknown sender)"
+            } else if app.mac_style {
+                h.from.split('<').next().unwrap_or(&h.from).trim().trim_matches('"')
+            } else {
+                h.from.as_str()
+            };
+            ui.add(
+                egui::Label::new(
+                    RichText::new(from)
+                        .size(if app.mac_style { 16.0 } else { 14.0 })
+                        .strong()
+                        .color(theme.text),
+                )
+                .truncate(),
+            );
             if !h.to.is_empty() {
                 recipients_line(ui, "To:", &h.to, &theme);
             }
@@ -769,7 +843,7 @@ fn header(ui: &mut Ui, app: &mut App, h: &ReadingHeader, id: u64, narrow: bool, 
     ui.advance_cursor_after_rect(right_used);
 
     // 3. Categories.
-    if !h.categories.is_empty() {
+    if !app.mac_style && !h.categories.is_empty() {
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             for c in &h.categories {

@@ -354,7 +354,7 @@ impl SyncState {
             .flat_map(|(a, b)| b.ops.iter().map(move |op| (a, *op)))
             .collect()
     }
-    fn busy(&self, id: AccountId) -> bool {
+    pub(crate) fn busy(&self, id: AccountId) -> bool {
         self.runs.get(&id).is_some_and(|r| r.busy.is_some())
     }
 }
@@ -364,7 +364,7 @@ impl SyncState {
 // =======================================================================================================
 
 fn is_server_account(kind: AccountKind) -> bool {
-    matches!(kind, AccountKind::Imap | AccountKind::Jmap)
+    matches!(kind, AccountKind::Imap | AccountKind::Jmap | AccountKind::Graph)
 }
 
 impl Session {
@@ -573,6 +573,7 @@ pub(crate) fn send_now(s: &mut Session, account: AccountId) {
 
 /// Drops the worker and runtime state of a removed account.
 pub(crate) fn forget_account(s: &mut Session, id: AccountId) {
+    crate::cmd::connected::invalidate(s, id);
     s.sync.runs.remove(&id);
     s.sync.tests.remove(&id);
     s.sync.fetch.remove(&id);
@@ -982,8 +983,13 @@ pub(crate) fn queue_local_changes(s: &mut Session, before: &Mailbox) -> usize {
     crate::accounts::load_prefs(s);
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let jmap: Vec<AccountId> =
-            s.mailbox.accounts.iter().filter(|a| a.kind == AccountKind::Jmap).map(|a| a.id).collect();
+        let jmap: Vec<AccountId> = s
+            .mailbox
+            .accounts
+            .iter()
+            .filter(|a| matches!(a.kind, AccountKind::Jmap | AccountKind::Graph))
+            .map(|a| a.id)
+            .collect();
         for a in jmap {
             if jmap::changed(before, &s.mailbox, a) {
                 s.sync.jmap_dirty.insert(a);
@@ -1296,6 +1302,7 @@ fn item_changes(
 pub(crate) fn after_restore(s: &mut Session, live: &Mailbox) {
     // Internet calendars keep their last refresh (refreshes are not undo steps).
     crate::cmd::calendar::subscribe::carry_over(live, &mut s.mailbox);
+    graph_pim::carry_over(live, &mut s.mailbox);
     if !live.accounts.iter().any(|a| a.kind == AccountKind::Imap) {
         return;
     }
@@ -1454,6 +1461,9 @@ fn item_source(s: &Session, m: &MailItem) -> Vec<u8> {
 
 pub mod arrival;
 pub mod cmds;
+#[cfg(not(target_arch = "wasm32"))]
+mod graph;
+pub(crate) mod graph_pim;
 #[cfg(not(target_arch = "wasm32"))]
 mod jmap;
 #[cfg(not(target_arch = "wasm32"))]

@@ -74,6 +74,8 @@ impl BodyView {
 pub struct BodyOptions {
     /// Dark rendering (colours re-mapped, dark background).
     pub dark: bool,
+    /// Default paper and ink for a desktop palette; authored colors keep their normal rendering.
+    pub palette: Option<(Color32, Color32)>,
     /// Zoom factor (1.0 = 100 %).
     pub zoom: f32,
     /// Remote (http/https) images allowed ("Download pictures"). Without a network loader they still show a
@@ -87,7 +89,14 @@ pub struct BodyOptions {
 
 impl Default for BodyOptions {
     fn default() -> Self {
-        BodyOptions { dark: false, zoom: 1.0, allow_remote: false, paint_background: true, doc_key: None }
+        BodyOptions {
+            dark: false,
+            palette: None,
+            zoom: 1.0,
+            allow_remote: false,
+            paint_background: true,
+            doc_key: None,
+        }
     }
 }
 
@@ -303,7 +312,7 @@ fn paint_and_interact(
     let painter = ui.painter().with_clip_rect(clip);
     let dark = opts.dark;
     if opts.paint_background {
-        let bg = map_color(doc.background.unwrap_or(Color::WHITE), dark);
+        let bg = body_background(doc.background, dark, opts.palette);
         painter.rect_filled(rect, 0.0, bg);
     }
     paint_ranges(&painter, layout, &view.marks, origin, clip, mark_fill(dark));
@@ -351,7 +360,7 @@ fn paint_and_interact(
                 if !approx.intersects(clip) || base.x > clip.right() {
                     continue;
                 }
-                let col = map_color(*color, dark);
+                let col = body_text_color(*color, dark, opts.palette);
                 let family = families.get(&ctx, db, *font);
                 let galley = ctx.fonts_mut(|f| {
                     f.layout_no_wrap(text.clone(), egui::FontId::new(size, family.clone()), col)
@@ -1261,6 +1270,29 @@ fn egui_family(ctx: &egui::Context, db: &FontDb, id: McFontId) -> FontFamily {
     fallback
 }
 
+/// Theme the default paper while preserving explicitly authored colored backgrounds.
+pub(crate) fn body_background(
+    background: Option<Color>,
+    dark: bool,
+    palette: Option<(Color32, Color32)>,
+) -> Color32 {
+    if background.is_none_or(|color| color == Color::WHITE)
+        && let Some((paper, _)) = palette
+    {
+        return paper;
+    }
+    map_color(background.unwrap_or(Color::WHITE), dark)
+}
+
+fn body_text_color(color: Color, dark: bool, palette: Option<(Color32, Color32)>) -> Color32 {
+    if color == Color::BLACK
+        && let Some((_, ink)) = palette
+    {
+        return ink;
+    }
+    map_color(color, dark)
+}
+
 /// Geometry colour → egui colour, re-mapped for dark rendering.
 pub fn map_color(c: Color, dark: bool) -> Color32 {
     if !dark {
@@ -1315,6 +1347,20 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_palette_changes_default_paper_and_ink_only() {
+        let paper = Color32::from_rgb(26, 27, 38);
+        let ink = Color32::from_rgb(192, 202, 245);
+        let palette = Some((paper, ink));
+        assert_eq!(body_background(None, true, palette), paper);
+        assert_eq!(body_background(Some(Color::WHITE), true, palette), paper);
+        assert_eq!(body_text_color(Color::BLACK, true, palette), ink);
+        let authored = Color::rgb(30, 100, 180);
+        assert_eq!(body_background(Some(authored), true, palette), map_color(authored, true));
+        assert_eq!(body_text_color(authored, true, palette), map_color(authored, true));
+        assert_eq!(body_background(None, false, None), Color32::WHITE);
+    }
 
     #[test]
     fn dark_mapping_inverts_lightness() {

@@ -9,11 +9,15 @@ The goal is a refined Mac mail experience with useful multi-account and shared-m
 | Area | Current behavior |
 |---|---|
 | Mac shell | Compact toolbar and search, neutral icons, light/dark appearances, system font loading on macOS |
-| Unified inbox | Combined Inbox folders and unread counts, inbox-scoped search, source-aware message actions |
+| Unified mailboxes | Combined Inbox and Sent folders, scoped search, source-aware message actions |
+| Graph mail | Initial OAuth Graph transport, folder discovery, delta/MIME sync, read/flag/move/delete and sending; local fixture validation |
+| Connected organizer | Opt-in Graph calendars (90 days back, one year ahead) and default contacts; offline snapshots, selected conditional edits, attendee responses and persistent pending-change review |
 | Linked mailboxes | Shared/delegated labels, independent OAuth grants, receive-only default, explicit Send As opt-in |
-| Compose | Visible From field, compact actions, existing rich formatting behind Formatting |
+| Compose | Visible sender and signature selector, compact formatting row, optional Cc/Bcc, deeper tools in menus |
 | Settings | Icon navigation, layered grouped forms, aligned controls, switches, appearance selector, Save/Cancel |
 | Account manager | Mailbox list and details, connection actions, linked-mailbox entry point, advanced options |
+| Organizer | Persistent Mail/Calendar/Contacts/Tasks/Notes navigation, contextual creation actions, deeper module tools in menus |
+| Appearance profiles | Saved Apple, Outlook layout and Omarchy/Tokyo Night profiles, Light/Dark/Auto, custom palette editor and previews |
 | Identity | Original envelope icon, separate Mac profile and `dev.mailcraft.mac` bundle identifier |
 
 ## Next priorities
@@ -21,8 +25,8 @@ The goal is a refined Mac mail experience with useful multi-account and shared-m
 - Continue visual and interaction polish across mail, compose, and less frequently used dialogs.
 - Verify keyboard navigation, accessibility, and narrow-window behavior throughout the Mac shell.
 - Validate linked mailbox OAuth and Send As behavior against a Microsoft 365 tenant before claiming production compatibility.
-- Add account discovery and richer permission feedback; evaluate Graph for organizations that disable IMAP/SMTP.
-- Plan Send on Behalf and shared Exchange calendar support; neither is implemented today.
+- Validate the initial Graph transport against a tenant; add richer permission feedback and broader mail operations.
+- Add calendar/contact creation/deletion, broader organizer/shared-calendar workflows and custom contact folders; add a configurable delegated sending mode.
 - Prepare a signed, notarized Mac distribution and fork-specific release process.
 
 See [Mac account setup and limits](docs/mac.md) for implemented behavior and known gaps.

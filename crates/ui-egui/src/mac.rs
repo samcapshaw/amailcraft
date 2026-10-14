@@ -1,14 +1,28 @@
 //! Integrated desktop shell. All mail operations dispatch through the existing command registry.
 use crate::{App, responsive::Frame, widgets, with_shell};
 use egui::{Align, Layout, Rect, RichText, Sense, Stroke, Ui, UiBuilder, pos2, vec2};
+use mailcraft_engine::Module;
 use mailcraft_engine::queries::{self, FolderRowKind};
 use serde_json::json;
 
 impl App {
+    /// Compatibility entry point for hosts that previously opted into the Mac shell.
     pub fn enable_mac_style(&mut self) {
-        self.mac_style = true;
-        self.run("nav.unifiedInbox", json!({}));
-        self.theme = crate::theme::Theme::mac(self.s.view.dark);
+        self.enable_desktop_themes();
+    }
+
+    /// Enable saved desktop layouts on any platform, with Apple as the default.
+    pub fn enable_desktop_themes(&mut self) {
+        self.theme_chooser_enabled = true;
+        self.theme = crate::theme::Theme::for_settings(&self.s.settings, self.s.view.dark);
+        self.mac_style = self.theme.mac_style;
+        if self.mac_style {
+            self.run("nav.unifiedInbox", json!({}));
+            self.run("view.readingPane", json!({"position":"right"}));
+            if self.s.mailbox.views.get(&self.s.selection.folder).cloned().unwrap_or_default().focused_inbox {
+                self.run("view.focusedInbox", json!({"on":false}));
+            }
+        }
     }
 }
 
@@ -28,7 +42,14 @@ fn action(ui: &mut Ui, app: &mut App, icon: &str, label: &str, command: &str, en
 
 pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
     let rect = ui.max_rect();
-    let toolbar = Rect::from_min_max(rect.min, pos2(rect.right(), (rect.top() + 58.0).min(rect.bottom())));
+    let toolbar = Rect::from_min_max(
+        rect.min,
+        pos2(
+            rect.right(),
+            (rect.top() + if app.mail_like_module() && frame.width < 680.0 { 104.0 } else { 58.0 })
+                .min(rect.bottom()),
+        ),
+    );
     ui.painter().rect_filled(toolbar, 0, app.theme.chrome);
     ui.painter().hline(toolbar.x_range(), toolbar.bottom() - 0.5, Stroke::new(1.0, app.theme.separator));
     let drag = ui.interact(toolbar, ui.id().with("mac-toolbar-drag"), Sense::drag());
@@ -40,43 +61,82 @@ pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
         s.layout.ribbon_shown = false;
     });
     let left = Rect::from_min_max(
-        toolbar.min + vec2(if ui.ctx().os() == egui::os::OperatingSystem::Mac { 82.0 } else { 14.0 }, 0.0),
+        toolbar.min + vec2(14.0, 0.0),
         pos2(
             (toolbar.left() + if frame.width < 700.0 { 180.0 } else { 230.0 }).min(toolbar.right()),
-            toolbar.bottom(),
+            toolbar.top() + 58.0,
         ),
     );
     let mut c = child(ui, left, "mac-title", Layout::left_to_right(Align::Center));
-    action(&mut c, app, "sync", "Get new mail", "sendReceive.all", true);
+    let shown = app.s.view.folder_pane != mailcraft_model::FolderPaneState::Off;
+    if widgets::icon_toggle(
+        &mut c,
+        app,
+        "folder-pane",
+        if shown { "Hide mailboxes" } else { "Show mailboxes" },
+        shown,
+        28.0,
+    )
+    .clicked()
+    {
+        app.run("view.folderPane", json!({"mode":if shown {"off"}else{"normal"}}));
+    }
     c.add_space(8.0);
     c.label(RichText::new("MailCraft").size(16.0).strong());
-    let tools = Rect::from_min_max(pos2(left.right(), toolbar.top()), toolbar.max);
+    let tools =
+        Rect::from_min_max(pos2(left.right(), toolbar.top()), pos2(toolbar.right(), toolbar.top() + 58.0));
     let mut c = child(ui, tools.shrink2(vec2(12.0, 0.0)), "mac-tools", Layout::left_to_right(Align::Center));
-    action(&mut c, app, "new-mail", "New message", "mail.newEmail", true);
-    c.separator();
+    let mail = app.mail_like_module();
     let selected = !app.s.selection.items.is_empty() || app.s.selection.focus.is_some();
-    action(&mut c, app, "archive", "Archive", "mail.archive", selected);
-    action(&mut c, app, "deleted", "Move to Trash", "mail.delete", selected);
-    if frame.width >= 900.0 {
+    if mail {
+        action(&mut c, app, "new-mail", "New message", "mail.newEmail", true);
         c.separator();
-        action(&mut c, app, "reply", "Reply", "mail.reply", selected);
-        action(&mut c, app, "reply-all", "Reply to all", "mail.replyAll", selected);
-        action(&mut c, app, "forward", "Forward", "mail.forward", selected);
-        action(&mut c, app, "flag", "Flag", "mail.flag", selected);
+        action(&mut c, app, "archive", "Archive", "mail.archive", selected);
+        action(&mut c, app, "deleted", "Move to Trash", "mail.delete", selected);
+        if frame.width >= 900.0 {
+            c.separator();
+            action(&mut c, app, "reply", "Reply", "mail.reply", selected);
+        }
+    } else {
+        module_toolbar(&mut c, app, frame);
     }
     c.menu_button("More", |ui| {
-        for (label, cmd) in [
-            ("Reply", "mail.reply"),
-            ("Reply all", "mail.replyAll"),
-            ("Forward", "mail.forward"),
-            ("Flag", "mail.flag"),
-        ] {
-            if ui.add_enabled(selected, egui::Button::new(label)).clicked() {
-                app.run(cmd, json!({}));
+        if mail {
+            for (label, cmd) in [
+                ("Reply", "mail.reply"),
+                ("Reply all", "mail.replyAll"),
+                ("Forward", "mail.forward"),
+                ("Flag", "mail.flag"),
+            ] {
+                if ui.add_enabled(selected, egui::Button::new(label)).clicked() {
+                    app.run(cmd, json!({}));
+                    ui.close();
+                }
+            }
+        } else {
+            ui.menu_button("All tools", |ui| crate::ribbon::module_tools_menu(ui, app));
+        }
+        ui.separator();
+        if ui.button("Get new mail").clicked() {
+            app.run("sendReceive.all", json!({}));
+            ui.close();
+        }
+        if mail {
+            ui.menu_button("Reading layout", |ui| {
+                for (label, position) in
+                    [("Below messages", "bottom"), ("Reader on right", "right"), ("Hidden", "off")]
+                {
+                    if ui.button(label).clicked() {
+                        app.run("view.readingPane", json!({"position":position}));
+                        ui.close();
+                    }
+                }
+            });
+            if ui.button("Toggle Focused inbox").clicked() {
+                app.run("view.focusedInbox", json!({}));
                 ui.close();
             }
         }
-        ui.separator();
         for (label, cmd) in [
             ("Accounts…", "file.accountSettings"),
             ("Mail settings…", "file.options"),
@@ -105,17 +165,102 @@ pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
             }
         }
     });
-    if c.available_width() > 125.0 {
-        let w = c.available_width().min(240.0);
-        let r =
-            Rect::from_center_size(pos2(c.max_rect().right() - w / 2.0, toolbar.center().y), vec2(w, 29.0));
-        search_field(&mut c, app, r);
+    if mail {
+        if frame.width < 680.0 {
+            let search = Rect::from_min_max(
+                pos2(toolbar.left() + 16.0, toolbar.top() + 62.0),
+                pos2(toolbar.right() - 16.0, toolbar.bottom() - 10.0),
+            );
+            search_field(ui, app, search);
+        } else if c.available_width() > 140.0 {
+            let width = c.available_width().min(300.0);
+            let search = Rect::from_center_size(
+                pos2(toolbar.right() - width / 2.0 - 16.0, toolbar.top() + 29.0),
+                vec2(width, 34.0),
+            );
+            search_field(ui, app, search);
+        }
     }
 
-    let content = Rect::from_min_max(pos2(rect.left(), toolbar.bottom()), rect.max);
+    let navigation =
+        Rect::from_min_max(pos2(rect.left(), (rect.bottom() - 40.0).max(toolbar.bottom())), rect.max);
+    module_navigation(ui, app, navigation);
+    let content =
+        Rect::from_min_max(pos2(rect.left(), toolbar.bottom()), pos2(rect.right(), navigation.top()));
     if content.is_positive() {
         let mut c = child(ui, content, "mac-content", Layout::top_down(Align::Min));
         crate::chrome::content_area(&mut c, app, frame);
+    }
+}
+
+fn module_toolbar(ui: &mut Ui, app: &mut App, frame: &Frame) {
+    let (icon, label, cmd) = match app.s.view.module {
+        Module::Calendar => ("appointment", "New event", "calendar.newAppointment"),
+        Module::People => ("person", "New contact", "people.new"),
+        Module::Tasks => ("task", "New task", "tasks.new"),
+        Module::Notes => ("note", "New note", "notes.new"),
+        _ => return,
+    };
+    if widgets::icon_button(ui, app, icon, label, true).clicked() {
+        app.run(cmd, json!({"form":true}));
+    }
+    if app.s.view.module == Module::Calendar
+        && frame.width >= 700.0
+        && widgets::icon_button(ui, app, "meeting", "New meeting", true).clicked()
+    {
+        app.run("calendar.newMeeting", json!({"form":true}));
+    }
+    ui.separator();
+}
+
+/// Persistent, compact navigation keeps the full application visible from every module.
+fn module_navigation(ui: &mut Ui, app: &mut App, rect: Rect) {
+    ui.painter().rect_filled(rect, 0, app.theme.chrome);
+    ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(0.5, app.theme.separator));
+    let labels = rect.width() >= 560.0;
+    let width = if labels { 106.0 } else { ((rect.width() - 24.0) / 5.0).clamp(28.0, 64.0) };
+    for (i, (module, icon, label, cmd)) in [
+        (Module::Mail, "mail", "Mail", "nav.mail"),
+        (Module::Calendar, "calendar", "Calendar", "nav.calendar"),
+        (Module::People, "people", "Contacts", "nav.people"),
+        (Module::Tasks, "tasks", "Tasks", "nav.tasks"),
+        (Module::Notes, "note", "Notes", "nav.notes"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let row = Rect::from_min_size(
+            pos2(rect.left() + 12.0 + i as f32 * width, rect.top() + 5.0),
+            vec2(width - 4.0, 30.0),
+        );
+        let selected = app.s.view.module == module || module == Module::Mail && app.mail_like_module();
+        let r = ui.interact(row, ui.id().with(("mac-module", cmd)), Sense::click());
+        r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label));
+        if selected || r.hovered() {
+            ui.painter().rect_filled(
+                row,
+                6,
+                if selected { app.theme.selected_folder } else { app.theme.hover },
+            );
+        }
+        if r.has_focus() {
+            ui.painter().rect_stroke(row, 6, Stroke::new(1.0, app.theme.accent), egui::StrokeKind::Inside);
+        }
+        let ink = if selected { app.theme.text } else { app.theme.text_muted };
+        let x = if labels { row.left() + 17.0 } else { row.center().x };
+        app.icons.paint(ui, Rect::from_center_size(pos2(x, row.center().y), vec2(15.0, 15.0)), icon, ink);
+        if labels {
+            ui.painter().text(
+                pos2(row.left() + 31.0, row.center().y),
+                egui::Align2::LEFT_CENTER,
+                label,
+                egui::FontId::proportional(12.0),
+                ink,
+            );
+        }
+        if r.on_hover_text(label).clicked() {
+            app.run(cmd, json!({}));
+        }
     }
 }
 
@@ -126,11 +271,10 @@ fn search_field(ui: &mut Ui, app: &mut App, rect: Rect) {
         app.ui.search_text.clone_from(&app.s.view.search);
     }
     let th = app.theme.clone();
-    let fill =
-        if th.dark { egui::Color32::from_rgb(48, 48, 51) } else { egui::Color32::from_rgb(232, 232, 235) };
+    let fill = if th.dark { th.chrome } else { egui::Color32::from_rgb(246, 246, 248) };
     ui.painter().rect(
         rect,
-        7,
+        8,
         fill,
         Stroke::new(
             if focused { 1.0 } else { 0.5 },
@@ -145,8 +289,8 @@ fn search_field(ui: &mut Ui, app: &mut App, rect: Rect) {
     let edit = c.add(
         egui::TextEdit::singleline(&mut app.ui.search_text)
             .id(id)
-            .hint_text(RichText::new("Search").size(12.0).color(th.text_muted))
-            .font(egui::FontId::proportional(12.0))
+            .hint_text(RichText::new("Search mail").size(14.0).color(th.text_muted))
+            .font(egui::FontId::proportional(14.0))
             .frame(egui::Frame::NONE)
             .desired_width((c.available_width() - if clear { 28.0 } else { 0.0 }).max(20.0))
             .vertical_align(Align::Center),
@@ -170,199 +314,330 @@ fn search_field(ui: &mut Ui, app: &mut App, rect: Rect) {
     }
 }
 
-pub fn sidebar(ui: &mut Ui, app: &mut App) {
-    let rows = queries::folder_rows(&app.s);
-    let mut sections: Vec<Vec<queries::FolderRow>> = Vec::new();
-    for row in rows {
-        if matches!(row.kind, FolderRowKind::FavoritesHeader | FolderRowKind::AccountRoot) {
-            sections.push(Vec::new());
-        }
-        if let Some(section) = sections.last_mut() {
-            section.push(row);
-        }
-    }
-    sections.sort_by_key(|section| match section.first() {
-        Some(row) if row.kind == FolderRowKind::FavoritesHeader => 0,
-        Some(row)
-            if app.s.mailbox.accounts.iter().any(|a| a.address == row.name && a.linked_mailbox.is_some()) =>
-        {
-            1
-        }
-        _ => 2,
-    });
-    let mut skip = false;
-    let mut shown_unified = false;
-    egui::ScrollArea::vertical().id_salt("mac-sidebar").auto_shrink([false, false]).show(ui, |ui| {
-        ui.add_space(12.0);
-        ui.spacing_mut().item_spacing.y = 3.0;
-        for mut row in sections.into_iter().flatten() {
-            if matches!(row.kind, FolderRowKind::FavoritesHeader | FolderRowKind::AccountRoot) {
-                let linked_account = app
-                    .s
-                    .mailbox
-                    .accounts
-                    .iter()
-                    .find(|a| a.address == row.name && a.linked_mailbox.is_some())
-                    .cloned();
-                skip = linked_account
-                    .as_ref()
-                    .is_some_and(|a| app.s.view.unified_inbox || app.s.current_account() != Some(a.id));
-                if let Some(a) = &linked_account {
-                    ui.add_space(8.0);
-                    let (rect, response) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
-                    if !skip || response.hovered() {
-                        ui.painter().rect_filled(
-                            rect.shrink2(vec2(8.0, 0.0)),
-                            6,
-                            if skip { app.theme.hover } else { app.theme.selected_folder },
-                        );
-                    }
-                    app.icons.paint(
-                        ui,
-                        Rect::from_center_size(pos2(rect.left() + 28.0, rect.center().y), vec2(20.0, 20.0)),
-                        "people",
-                        app.theme.text_muted,
-                    );
-                    let kind = if a.linked_mailbox.as_ref().is_some_and(|l| l.delegated) {
-                        "Delegated"
-                    } else {
-                        "Shared"
-                    };
-                    ui.painter().text(
-                        pos2(rect.left() + 48.0, rect.top() + 13.0),
-                        egui::Align2::LEFT_CENTER,
-                        &a.display_name,
-                        egui::FontId::proportional(13.0),
-                        app.theme.text,
-                    );
-                    ui.painter().text(
-                        pos2(rect.left() + 48.0, rect.top() + 30.0),
-                        egui::Align2::LEFT_CENTER,
-                        format!("{kind} mailbox"),
-                        egui::FontId::proportional(11.0),
-                        app.theme.text_muted,
-                    );
-                    response.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            true,
-                            format!("{} · {kind}", a.display_name),
-                        )
-                    });
-                    if response.clicked()
-                        && let Some(inbox) =
-                            app.s.mailbox.role_folder(a.id, mailcraft_model::FolderRole::Inbox)
-                    {
-                        app.run("nav.selectFolder", json!({"folder": inbox.0}));
-                    }
-                } else {
-                    ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        ui.add_space(14.0);
-                        ui.label(RichText::new(&row.name).size(11.0).strong().color(app.theme.text_muted));
-                    });
-                }
-                continue;
-            }
-            if skip {
-                continue;
-            }
-            let Some(id) = row.id else {
-                continue;
-            };
-            let unified_row = row.kind == FolderRowKind::Favorite
-                && app
-                    .s
-                    .mailbox
-                    .folder(id)
-                    .is_some_and(|f| f.role == Some(mailcraft_model::FolderRole::Inbox));
-            if unified_row {
-                if shown_unified {
-                    continue;
-                }
-                shown_unified = true;
-                row.name = "All Inboxes".into();
-                let unread = queries::inbox_items(&app.s).iter().filter(|m| !m.read).count();
-                row.badge = if unread == 0 { String::new() } else { unread.to_string() };
-                row.accessible = format!("All Inboxes: {unread} unread messages");
-                row.selected = app.s.view.unified_inbox;
-            } else {
-                row.selected &= !app.s.view.unified_inbox && row.kind != FolderRowKind::Favorite;
-            }
-            let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), 31.0), Sense::click());
-            let paint = rect.shrink2(vec2(8.0, 0.0));
-            if row.selected || r.hovered() {
-                ui.painter().rect_filled(
-                    paint,
-                    6,
-                    if row.selected { app.theme.selected_folder } else { app.theme.hover },
-                );
-            }
-            let icon = match row.name.as_str() {
-                "Inbox" | "All Inboxes" => "inbox",
-                "Drafts" => "drafts",
-                "Sent Items" => "sent",
-                "Deleted Items" => "deleted",
-                "Archive" => "archive-folder",
-                "Junk Email" => "junk-folder",
-                _ => "folder",
-            };
-            let x = paint.left() + 12.0 + row.depth.saturating_sub(1).min(6) as f32 * 12.0;
-            app.icons.paint(
-                ui,
-                Rect::from_center_size(pos2(x + 8.0, paint.center().y), vec2(17.0, 17.0)),
-                icon,
-                if row.selected { app.theme.text } else { app.theme.text_muted },
-            );
-            let name = if row.name == "Deleted Items" {
-                "Trash"
-            } else if row.name == "Sent Items" {
-                "Sent"
-            } else {
-                &row.name
-            };
-            ui.painter().text(
-                pos2(x + 25.0, paint.center().y),
-                egui::Align2::LEFT_CENTER,
-                name,
-                egui::FontId::proportional(13.0),
-                app.theme.text,
-            );
-            ui.painter().text(
-                pos2(paint.right() - 10.0, paint.center().y),
-                egui::Align2::RIGHT_CENTER,
-                &row.badge,
-                egui::FontId::proportional(11.0),
-                app.theme.text_muted,
-            );
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &row.accessible));
-            if r.clicked() {
-                if unified_row {
-                    app.run("nav.unifiedInbox", json!({}));
-                } else {
-                    app.run("nav.selectFolder", json!({"folder": id.0}));
-                }
-            }
-            if unified_row {
-                r.context_menu(|ui| {
-                    if ui.button("Mark all inboxes as read").clicked() {
-                        app.run("mail.markAllRead", json!({}));
-                        ui.close();
-                    }
-                });
-            } else {
-                r.context_menu(|ui| crate::menus::folder_menu(ui, app, id));
-            }
-        }
+fn sidebar_heading(ui: &mut Ui, app: &App, title: &str) {
+    ui.add_space(if ui.clip_rect().height() < 650.0 { 10.0 } else { 18.0 });
+    ui.horizontal(|ui| {
         ui.add_space(20.0);
-        ui.horizontal(|ui| {
-            ui.add_space(12.0);
-            if ui.small_button("Manage accounts…").clicked() {
-                app.run("file.accountSettings", json!({}));
+        ui.label(RichText::new(title).size(13.0).strong().color(app.theme.text_muted));
+    });
+    ui.add_space(8.0);
+}
+
+fn sidebar_entry(
+    ui: &mut Ui,
+    app: &mut App,
+    key: &str,
+    label: &str,
+    icon: &str,
+    badge: &str,
+    selected: bool,
+) -> egui::Response {
+    let compact = ui.clip_rect().height() < 650.0;
+    let (rect, r) =
+        ui.allocate_exact_size(vec2(ui.available_width(), if compact { 34.0 } else { 42.0 }), Sense::click());
+    let paint = rect.shrink2(vec2(12.0, 0.0));
+    if selected || r.hovered() {
+        ui.painter().rect_filled(
+            paint,
+            7,
+            if selected { app.theme.selected_folder } else { app.theme.hover },
+        );
+    }
+    app.icons.paint(
+        ui,
+        Rect::from_center_size(pos2(rect.left() + 30.0, rect.center().y), vec2(18.0, 18.0)),
+        icon,
+        app.theme.accent,
+    );
+    let text = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        egui::FontId::proportional(if compact { 14.0 } else { 16.0 }),
+        app.theme.text,
+    );
+    ui.painter()
+        .with_clip_rect(Rect::from_min_max(
+            pos2(rect.left() + 48.0, rect.top()),
+            pos2(rect.right() - 42.0, rect.bottom()),
+        ))
+        .galley(pos2(rect.left() + 48.0, rect.center().y - text.size().y / 2.0), text, app.theme.text);
+    ui.painter().text(
+        pos2(rect.right() - 24.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        badge,
+        egui::FontId::proportional(12.0),
+        app.theme.text_muted,
+    );
+    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, key));
+    r
+}
+
+pub fn sidebar(ui: &mut Ui, app: &mut App) {
+    let full = ui.available_rect_before_wrap();
+    let body = Rect::from_min_max(full.min, pos2(full.right(), (full.bottom() - 52.0).max(full.top())));
+    let mut content = child(ui, body, "mac-mailboxes", Layout::top_down(Align::Min));
+    let accounts = app.s.mailbox.accounts.clone();
+    let rows = queries::folder_rows(&app.s);
+    egui::ScrollArea::vertical()
+        .id_salt("mac-sidebar")
+        .auto_shrink([false, false])
+        .max_height(body.height())
+        .show(&mut content, |ui| {
+            ui.spacing_mut().item_spacing.y = 3.0;
+            sidebar_heading(ui, app, "Favorites");
+            let inboxes = queries::inbox_items(&app.s);
+            let unread = inboxes.iter().filter(|m| !m.read).count();
+            let flagged = inboxes
+                .iter()
+                .filter(|m| matches!(m.flag, mailcraft_model::FlagState::Flagged { .. }))
+                .count();
+            let filter = app.s.mailbox.views.get(&app.s.selection.folder).cloned().unwrap_or_default().filter;
+            let key = format!("All Inboxes: {unread} unread messages");
+            if sidebar_entry(
+                ui,
+                app,
+                &key,
+                "All Inboxes",
+                "inbox",
+                &unread.to_string(),
+                app.s.view.unified_inbox
+                    && !app.s.view.unified_sent
+                    && filter != mailcraft_model::ListFilter::Flagged
+                    && !app.s.view.search.contains("hasattachments:"),
+            )
+            .clicked()
+            {
+                app.run("nav.unifiedInbox", json!({}));
+                app.run("view.filter", json!({"kind":"all"}));
+            }
+            if sidebar_entry(
+                ui,
+                app,
+                "Flagged",
+                "Flagged",
+                "flag",
+                &flagged.to_string(),
+                app.s.view.unified_inbox
+                    && !app.s.view.unified_sent
+                    && filter == mailcraft_model::ListFilter::Flagged,
+            )
+            .clicked()
+            {
+                app.run("nav.unifiedInbox", json!({}));
+                if filter != mailcraft_model::ListFilter::Flagged {
+                    app.run("view.filter", json!({"kind":"flagged"}));
+                }
+            }
+            if sidebar_entry(
+                ui,
+                app,
+                "All Sent",
+                "All Sent",
+                "sent",
+                "",
+                app.s.view.unified_inbox && app.s.view.unified_sent,
+            )
+            .clicked()
+            {
+                app.run("nav.unifiedSent", json!({}));
+                app.run("view.filter", json!({"kind":"all"}));
+            }
+            if let Some(account) = app.s.mailbox.default_account().map(|a| a.id)
+                && let Some(folder) = app.s.mailbox.role_folder(account, mailcraft_model::FolderRole::Drafts)
+            {
+                let count = app.s.mailbox.mail.values().filter(|m| m.folder == folder).count();
+                let badge = if count > 0 { count.to_string() } else { String::new() };
+                if sidebar_entry(
+                    ui,
+                    app,
+                    "Drafts",
+                    "Drafts",
+                    "drafts",
+                    &badge,
+                    !app.s.view.unified_inbox && app.s.selection.folder == folder,
+                )
+                .clicked()
+                {
+                    app.run("nav.selectFolder", json!({"folder":folder.0}));
+                }
+            }
+            sidebar_heading(ui, app, "Mailboxes");
+            for a in &accounts {
+                let linked = a.linked_mailbox.as_ref();
+                let delegated = linked.is_some_and(|l| l.delegated);
+                let state = egui::Id::new(("mac-account-expanded", a.id.0));
+                let compact = body.height() < 650.0;
+                let expanded = ui.ctx().data(|d| d.get_temp::<bool>(state)).unwrap_or(!compact && !delegated);
+                let (rect, _) = ui.allocate_exact_size(
+                    vec2(ui.available_width(), if compact { 44.0 } else { 55.0 }),
+                    Sense::hover(),
+                );
+                let chevron =
+                    Rect::from_min_size(pos2(rect.left() + 18.0, rect.top() + 8.0), vec2(18.0, 22.0));
+                let toggle = ui.interact(chevron, ui.id().with(("account-expand", a.id.0)), Sense::click());
+                app.icons.paint(
+                    ui,
+                    Rect::from_center_size(chevron.center(), vec2(12.0, 12.0)),
+                    if expanded { "chevron-down" } else { "chevron-right" },
+                    app.theme.text_muted,
+                );
+                toggle.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        true,
+                        format!(
+                            "{} {} mailbox",
+                            if expanded { "Collapse" } else { "Expand" },
+                            a.display_name
+                        ),
+                    )
+                });
+                if toggle.clicked() {
+                    ui.ctx().data_mut(|d| d.insert_temp(state, !expanded));
+                }
+                let title =
+                    if linked.is_none() && a.is_default { "Personal" } else { a.display_name.as_str() };
+                let subtitle = linked
+                    .map(|l| {
+                        if l.delegated {
+                            if l.send_as { "Delegated mailbox" } else { "Delegated · Receive only" }
+                        } else {
+                            "Shared mailbox"
+                        }
+                    })
+                    .unwrap_or(&a.address);
+                ui.painter().text(
+                    pos2(rect.left() + 38.0, rect.top() + 9.0),
+                    egui::Align2::LEFT_TOP,
+                    title,
+                    egui::FontId::proportional(16.0),
+                    app.theme.text,
+                );
+                ui.painter().text(
+                    pos2(rect.left() + 26.0, rect.top() + if compact { 27.0 } else { 32.0 }),
+                    egui::Align2::LEFT_TOP,
+                    subtitle,
+                    egui::FontId::proportional(12.0),
+                    app.theme.text_muted,
+                );
+                let select = ui.interact(
+                    Rect::from_min_max(pos2(chevron.right(), rect.top()), rect.max),
+                    ui.id().with(("account-select", a.id.0)),
+                    Sense::click(),
+                );
+                let kind = if delegated { "Delegated" } else { "Shared" };
+                select.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        true,
+                        if linked.is_some() {
+                            format!("{} · {kind}", a.display_name)
+                        } else {
+                            format!("{} mailbox", a.address)
+                        },
+                    )
+                });
+                if select.clicked()
+                    && let Some(inbox) = app.s.mailbox.role_folder(a.id, mailcraft_model::FolderRole::Inbox)
+                {
+                    app.run("nav.selectFolder", json!({"folder":inbox.0}));
+                    ui.ctx().data_mut(|d| d.insert_temp(state, true));
+                }
+                if expanded {
+                    if let Some(inbox) = app.s.mailbox.role_folder(a.id, mailcraft_model::FolderRole::Inbox) {
+                        let count =
+                            app.s.mailbox.mail.values().filter(|m| m.folder == inbox && !m.read).count();
+                        if sidebar_entry(
+                            ui,
+                            app,
+                            &format!("{} Inbox", a.display_name),
+                            "Inbox",
+                            "inbox",
+                            &count.to_string(),
+                            !app.s.view.unified_inbox && app.s.selection.folder == inbox,
+                        )
+                        .clicked()
+                        {
+                            app.run("nav.selectFolder", json!({"folder":inbox.0}));
+                        }
+                    }
+                    ui.horizontal(|ui| {
+                        ui.add_space(38.0);
+                        ui.menu_button(
+                            RichText::new("More folders").size(11.0).color(app.theme.text_muted),
+                            |ui| {
+                                for row in &rows {
+                                    if row.kind == FolderRowKind::Folder
+                                        && let Some(folder) = row.id
+                                        && app.s.mailbox.folder_account(folder) == Some(a.id)
+                                    {
+                                        let r = ui.button(&row.name);
+                                        if r.clicked() {
+                                            app.run("nav.selectFolder", json!({"folder":folder.0}));
+                                            ui.close();
+                                        }
+                                        r.context_menu(|ui| crate::menus::folder_menu(ui, app, folder));
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button("All folders…").clicked() {
+                                    app.run("nav.goToFolder", json!({}));
+                                    ui.close();
+                                }
+                            },
+                        );
+                    });
+                }
+                ui.add_space(8.0);
+            }
+            sidebar_heading(ui, app, "Smart folders");
+            if sidebar_entry(
+                ui,
+                app,
+                "Attachments",
+                "Attachments",
+                "attach",
+                "",
+                app.s.view.search.contains("hasattachments:"),
+            )
+            .clicked()
+            {
+                app.run("nav.unifiedInbox", json!({}));
+                app.run("view.filter", json!({"kind":"all"}));
+                app.run("view.filter", json!({"kind":"hasAttachments"}));
+            }
+            let smart: Vec<_> = rows
+                .iter()
+                .filter(|r| {
+                    r.kind == FolderRowKind::Favorite
+                        && r.id.is_some_and(|id| app.s.mailbox.folder(id).is_some_and(|f| f.role.is_none()))
+                })
+                .cloned()
+                .collect();
+            for row in &smart {
+                if let Some(folder) = row.id
+                    && sidebar_entry(
+                        ui,
+                        app,
+                        &row.accessible,
+                        &row.name,
+                        "folder",
+                        &row.badge,
+                        row.selected && !app.s.view.unified_inbox,
+                    )
+                    .clicked()
+                {
+                    app.run("nav.selectFolder", json!({"folder":folder.0}));
+                }
             }
         });
-    });
+    let footer = Rect::from_min_max(
+        pos2(full.left() + 14.0, (full.bottom() - 42.0).max(full.top())),
+        pos2(full.right() - 12.0, full.bottom() - 8.0),
+    );
+    let mut footer = child(ui, footer, "mac-manage-accounts", Layout::left_to_right(Align::Center));
+    if widgets::icon_button(&mut footer, app, "settings", "Manage accounts…", true).clicked() {
+        app.run("file.accountSettings", json!({}));
+    }
 }
 
 #[cfg(test)]
@@ -383,6 +658,99 @@ mod tests {
         assert!(with_shell(&h.ctx, |s| s.layout.rect("reading").is_some()));
     }
     #[test]
+    fn reference_style_keeps_reader_on_right_and_mailboxes_collapsible() {
+        let mut app = App::new(mailcraft_engine::sample::sample_session());
+        app.enable_mac_style();
+        let mut h = Harness::builder()
+            .with_size(vec2(1280.0, 1000.0))
+            .build_ui_state(|ui, app: &mut App| app.ui_root(ui), app);
+        h.run();
+        let (reader, folders, list) = with_shell(&h.ctx, |s| {
+            (s.layout.rect("reading"), s.layout.rect("folders"), s.layout.rect("list"))
+        });
+        let reader = reader.unwrap();
+        let folders = folders.unwrap();
+        let list = list.unwrap();
+        assert!(list.left() >= folders.right());
+        assert!(list.right() <= reader.left());
+        assert_eq!(reader.top(), list.top());
+        assert_eq!(reader.bottom(), list.bottom());
+        let width = folders.width();
+        h.get_by_label("Hide mailboxes").click();
+        h.run();
+        assert_eq!(h.state().s.view.folder_pane, mailcraft_model::FolderPaneState::Off);
+        let (list, reader) =
+            with_shell(&h.ctx, |s| (s.layout.rect("list").unwrap(), s.layout.rect("reading").unwrap()));
+        assert!(list.left() < 1.0);
+        assert!(list.right() <= reader.left());
+        h.get_by_label("Show mailboxes").click();
+        h.run();
+        assert_eq!(h.state().s.view.folder_pane, mailcraft_model::FolderPaneState::Normal);
+        assert_eq!(with_shell(&h.ctx, |s| s.layout.rect("folders").unwrap().width()), width);
+
+        h.get_by_label("Flagged").click();
+        h.run();
+        assert!(h.state().s.view.unified_inbox);
+        let filter =
+            h.state().s.mailbox.views.get(&h.state().s.selection.folder).cloned().unwrap_or_default().filter;
+        assert_eq!(filter, mailcraft_model::ListFilter::Flagged);
+        h.get_by_label("Attachments").scroll_to_me();
+        h.run();
+        h.get_by_label("Attachments").click();
+        h.run();
+        assert!(h.state().s.view.search.contains("hasattachments:yes"));
+        h.get_by_label("More").click();
+        h.run();
+        h.get_by_label_contains("Reading layout").click();
+        h.run();
+        h.get_by_label("Below messages").click();
+        h.run();
+        assert_eq!(h.state().reading_pane_pos(), mailcraft_model::ReadingPanePos::Bottom);
+    }
+
+    #[test]
+    fn modules_remain_visible_and_calendar_creation_opens_an_unsaved_form() {
+        for (width, dark) in [(1280.0, false), (400.0, true)] {
+            let mut app = App::new(mailcraft_engine::sample::sample_session());
+            app.enable_mac_style();
+            if dark {
+                app.run("options.set", json!({"key":"view.darkMode","value":true}));
+            }
+            let mut h = Harness::builder()
+                .with_size(vec2(width, 900.0))
+                .build_ui_state(|ui, app: &mut App| app.ui_root(ui), app);
+            h.run();
+            for (label, module, create) in [
+                ("Calendar", Module::Calendar, "New event"),
+                ("Contacts", Module::People, "New contact"),
+                ("Tasks", Module::Tasks, "New task"),
+                ("Notes", Module::Notes, "New note"),
+            ] {
+                h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+                h.run();
+                assert_eq!(h.state().s.view.module, module);
+                assert!(h.query_by_label(create).is_some());
+                assert!(h.query_by_label("New message").is_none());
+                if module == Module::Calendar && width > 700.0 {
+                    assert!(h.query_by_label("Today").is_some());
+                    let count = h.state().s.mailbox.appointments.len();
+                    h.get_by_label("New event").click();
+                    h.run();
+                    assert!(h.query_by_label("Save & Close").is_some());
+                    assert_eq!(h.state().s.mailbox.appointments.len(), count);
+                    h.get_by_label("Cancel").click();
+                    h.run();
+                    assert_eq!(h.state().s.mailbox.appointments.len(), count);
+                }
+            }
+            h.get_by_role_and_label(egui::accesskit::Role::Button, "Mail").click();
+            h.run();
+            assert_eq!(h.state().s.view.module, Module::Mail);
+            assert!(h.query_by_label("New message").is_some());
+        }
+    }
+
+    #[test]
     fn shared_mailbox_navigation_uses_its_own_folder() {
         let now = mailcraft_engine::sample::sample_now();
         let mut app =
@@ -393,6 +761,8 @@ mod tests {
         let mut h = Harness::builder()
             .with_size(vec2(1280.0, 900.0))
             .build_ui_state(|ui, app: &mut App| app.ui_root(ui), app);
+        h.run();
+        h.get_by_label("Design team · Shared").scroll_to_me();
         h.run();
         h.get_by_label("Design team · Shared").click();
         h.run();

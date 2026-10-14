@@ -7,9 +7,23 @@
     "device_authorization_endpoint": null,
     "client_id": "",
     "client_secret": null,
-    "scopes": ["https://mail.google.com/"],
-    "domains": ["gmail.com", "googlemail.com"],
-    "extra_auth_params": [["access_type", "offline"], ["prompt", "consent"]]
+    "scopes": [
+      "https://mail.google.com/"
+    ],
+    "domains": [
+      "gmail.com",
+      "googlemail.com"
+    ],
+    "extra_auth_params": [
+      [
+        "access_type",
+        "offline"
+      ],
+      [
+        "prompt",
+        "consent"
+      ]
+    ]
   },
   {
     "id": "microsoft",
@@ -25,7 +39,70 @@
       "https://outlook.office.com/SMTP.Send",
       "offline_access"
     ],
-    "domains": ["outlook.com", "hotmail.com", "live.com", "msn.com"],
+    "domains": [
+      "outlook.com",
+      "hotmail.com",
+      "live.com",
+      "msn.com"
+    ],
+    "extra_auth_params": []
+  },
+  {
+    "id": "microsoft-graph",
+    "name": "Microsoft 365 (Graph, work or school)",
+    "authorization_endpoint": "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+    "token_endpoint": "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+    "device_authorization_endpoint": "https://login.microsoftonline.com/organizations/oauth2/v2.0/devicecode",
+    "client_id": "",
+    "client_secret": null,
+    "scopes": [
+      "https://graph.microsoft.com/Mail.ReadWrite",
+      "https://graph.microsoft.com/Mail.ReadWrite.Shared",
+      "https://graph.microsoft.com/Mail.Send",
+      "https://graph.microsoft.com/Mail.Send.Shared",
+      "offline_access"
+    ],
+    "domains": [],
+    "extra_auth_params": []
+  },
+  {
+    "id": "microsoft-graph-pim",
+    "name": "Microsoft 365 (mail, calendars and contacts)",
+    "authorization_endpoint": "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+    "token_endpoint": "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+    "device_authorization_endpoint": "https://login.microsoftonline.com/organizations/oauth2/v2.0/devicecode",
+    "client_id": "",
+    "client_secret": null,
+    "scopes": [
+      "https://graph.microsoft.com/Mail.ReadWrite",
+      "https://graph.microsoft.com/Mail.ReadWrite.Shared",
+      "https://graph.microsoft.com/Mail.Send",
+      "https://graph.microsoft.com/Mail.Send.Shared",
+      "offline_access",
+      "https://graph.microsoft.com/Calendars.Read.Shared",
+      "https://graph.microsoft.com/Contacts.Read.Shared"
+    ],
+    "domains": [],
+    "extra_auth_params": []
+  },
+  {
+    "id": "microsoft-graph-pim-write",
+    "name": "Microsoft 365 (mail and organizer editing)",
+    "authorization_endpoint": "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+    "token_endpoint": "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+    "device_authorization_endpoint": "https://login.microsoftonline.com/organizations/oauth2/v2.0/devicecode",
+    "client_id": "",
+    "client_secret": null,
+    "scopes": [
+      "https://graph.microsoft.com/Mail.ReadWrite",
+      "https://graph.microsoft.com/Mail.ReadWrite.Shared",
+      "https://graph.microsoft.com/Mail.Send",
+      "https://graph.microsoft.com/Mail.Send.Shared",
+      "offline_access",
+      "https://graph.microsoft.com/Calendars.ReadWrite.Shared",
+      "https://graph.microsoft.com/Contacts.ReadWrite.Shared"
+    ],
+    "domains": [],
     "extra_auth_params": []
   }
 ]

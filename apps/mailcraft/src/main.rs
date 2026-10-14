@@ -25,6 +25,7 @@ Usage: mailcraft [OPTIONS]
 Options:
   --profile <DIR>       Data folder to open (created when missing)
   --sample              Open an in-memory sample mailbox instead of a profile
+  --interface <NAME>    Select and save apple, outlook or omarchy layout
   --control-port <N>    Accept control commands on 127.0.0.1:<N> (for tests and automation)
   --version             Print the version and exit
   -h, --help            Print this help and exit
@@ -43,6 +44,7 @@ fn version_line() -> String {
 struct Args {
     profile: Option<PathBuf>,
     sample: bool,
+    interface: Option<String>,
     control_port: Option<u16>,
     version: bool,
     help: bool,
@@ -61,6 +63,13 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         match flag.as_str() {
             "--profile" => out.profile = Some(PathBuf::from(value("--profile")?)),
             "--sample" => out.sample = true,
+            "--interface" => {
+                let name = value("--interface")?;
+                if !mailcraft_engine::settings::INTERFACES.iter().any(|(id, _)| *id == name) {
+                    return Err("--interface needs apple, outlook or omarchy".into());
+                }
+                out.interface = Some(name);
+            }
             "--control-port" => {
                 let v = value("--control-port")?;
                 let port =
@@ -178,7 +187,14 @@ fn main() -> ExitCode {
 
     let session = open_session(&args);
     let mut app = App::new(session);
-    app.enable_mac_style();
+    if let Some(interface) = &args.interface
+        && let Err(error) =
+            app.s.run("options.set", &serde_json::json!({"key":"general.interface", "value":interface}))
+    {
+        eprintln!("Cannot select interface: {error}");
+        return ExitCode::FAILURE;
+    }
+    app.enable_desktop_themes();
     file_dialogs::install(&mut app);
     clipboard::install();
     app.ui.control_port = args.control_port.or_else(|| {
@@ -189,15 +205,18 @@ fn main() -> ExitCode {
     });
 
     let mut viewport = eframe::egui::ViewportBuilder::default()
-        .with_title("MailCraft Mac")
-        .with_app_id("dev.mailcraft.mac")
+        .with_title(if cfg!(target_os = "macos") { "MailCraft Mac" } else { "MailCraft" })
+        .with_app_id(if cfg!(target_os = "macos") { "dev.mailcraft.mac" } else { "saint.dev.MailCraft" })
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size(mailcraft_ui_egui::theme::size::MIN_WINDOW)
         .with_decorations(true);
     #[cfg(target_os = "macos")]
     {
-        viewport =
-            viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
+        viewport = viewport
+            .with_fullsize_content_view(false)
+            .with_titlebar_shown(true)
+            .with_titlebar_buttons_shown(true)
+            .with_title_shown(false);
     }
     if let Some((rgba, width, height)) = mailcraft_ui_egui::app_icon_rgba(256) {
         viewport = viewport.with_icon(eframe::egui::IconData { rgba, width, height });
@@ -241,6 +260,15 @@ mod tests {
         assert!(parse(&["--control-port", "x"]).is_err());
         assert!(parse(&["--profile"]).is_err());
         assert!(parse(&["--bogus"]).is_err());
+    }
+
+    #[test]
+    fn interface_option_accepts_only_supported_profiles() {
+        for name in ["apple", "outlook", "omarchy"] {
+            assert_eq!(parse(&["--interface", name]).unwrap().interface.as_deref(), Some(name));
+        }
+        assert!(parse(&["--interface", "unknown"]).is_err());
+        assert!(parse(&["--interface"]).is_err());
     }
 
     #[test]

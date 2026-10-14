@@ -109,6 +109,8 @@ impl UiState {
 pub struct App {
     /// Compact, integrated Mac shell. The classic shell remains available to other front ends.
     pub mac_style: bool,
+    /// Desktop profile chooser; classic test/web hosts opt in explicitly.
+    pub theme_chooser_enabled: bool,
     pub s: Session,
     pub ui: UiState,
     pub theme: theme::Theme,
@@ -282,6 +284,7 @@ impl App {
         let theme = theme::Theme::for_dark(s.view.dark);
         App {
             mac_style: false,
+            theme_chooser_enabled: false,
             s,
             ui: UiState::default(),
             theme,
@@ -440,16 +443,24 @@ impl App {
     }
 
     fn sync_theme(&mut self, ctx: &egui::Context) {
-        if self.theme.dark != self.s.view.dark {
-            self.theme = if self.mac_style {
-                theme::Theme::mac(self.s.view.dark)
-            } else {
-                theme::Theme::for_dark(self.s.view.dark)
-            };
+        let next = if self.theme_chooser_enabled {
+            theme::Theme::for_settings(&self.s.settings, self.s.view.dark)
+        } else if self.mac_style {
+            theme::Theme::mac(self.s.view.dark)
+        } else {
+            theme::Theme::for_dark(self.s.view.dark)
+        };
+        if self.theme != next {
+            self.theme = next;
+            if self.theme_chooser_enabled {
+                self.mac_style = self.theme.mac_style;
+            }
+            with_shell(ctx, |st| st.applied_dark = None);
         }
         let dark = self.theme.dark;
         if with_shell(ctx, |st| st.applied_dark) != Some(dark) {
             self.theme.apply(ctx);
+            chrome::invalidate_display_style(ctx);
             with_shell(ctx, |st| st.applied_dark = Some(dark));
         }
     }
@@ -619,4 +630,31 @@ pub fn font_definitions() -> egui::FontDefinitions {
         defs.families.insert(FontFamily::Monospace, list);
     }
     defs
+}
+
+#[cfg(test)]
+mod desktop_appearance_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn profile_changes_apply_without_a_dark_mode_change() {
+        let mut app = App::new(mailcraft_engine::sample::sample_session());
+        app.enable_mac_style();
+        let ctx = egui::Context::default();
+        app.sync_theme(&ctx);
+        let original = app.theme.clone();
+        app.run("options.set", json!({"key":"general.interface", "value":"omarchy"})).unwrap();
+        app.sync_theme(&ctx);
+        assert!(app.mac_style);
+        assert_ne!(app.theme, original);
+        assert_eq!(ctx.style_of(egui::Theme::Light).visuals.panel_fill, app.theme.pane);
+        app.run("options.set", json!({"key":"general.interface", "value":"outlook"})).unwrap();
+        app.sync_theme(&ctx);
+        assert!(!app.mac_style);
+        app.run("options.set", json!({"key":"general.interface", "value":"apple"})).unwrap();
+        app.sync_theme(&ctx);
+        assert!(app.mac_style);
+        assert_eq!(app.theme, original);
+    }
 }

@@ -499,6 +499,10 @@ pub struct AccountOptions {
     pub address: String,
     /// Incoming mail over POP3 (the account's kind is `Imap` until the model has a POP3 kind).
     pub pop3: bool,
+    /// Opt-in connected Microsoft 365 read-only calendars and contacts.
+    pub graph_calendars: bool,
+    pub graph_contacts: bool,
+    pub graph_editing: bool,
     pub download: DownloadMode,
     /// On slow connections download only headers (Download Preferences): while the last measured transfer
     /// rate is below the slow-connection threshold, new mail arrives as headers (see `sync::slow_connection`).
@@ -528,6 +532,9 @@ impl Default for AccountOptions {
         AccountOptions {
             address: String::new(),
             pop3: false,
+            graph_calendars: false,
+            graph_contacts: false,
+            graph_editing: false,
             download: DownloadMode::Full,
             slow_headers_only: true,
             download_months: Some(DEFAULT_DOWNLOAD_MONTHS),
@@ -584,6 +591,10 @@ pub struct AccountPrefs {
     pub marked: BTreeMap<u64, bool>,
     pub pop3: BTreeMap<u32, Pop3State>,
     pub jmap: BTreeMap<u32, JmapState>,
+    /// Independent Microsoft Graph delta cursors and last-seen mail state.
+    pub graph: BTreeMap<u32, JmapState>,
+    pub graph_writes: Vec<crate::cmd::connected::PendingWrite>,
+    pub next_graph_write: u64,
 }
 
 const OPTIONS_NOTE: &str = "MailCraft account options and send/receive bookkeeping. No secrets.";
@@ -633,9 +644,34 @@ pub(crate) fn load_prefs(s: &mut Session) {
     d.accounts.retain(|k, _| ids.contains(k));
     d.pop3.retain(|k, _| ids.contains(k));
     d.jmap.retain(|k, _| ids.contains(k));
+    d.graph.retain(|k, _| ids.contains(k));
+    d.graph_writes.retain(|op| ids.contains(&op.account.0));
+    d.next_graph_write = d.next_graph_write.max(d.graph_writes.iter().map(|op| op.id).max().unwrap_or(0));
+    for op in &mut d.graph_writes {
+        if op.status == "inFlight" {
+            op.status = "uncertain".into();
+            op.error =
+                "The app stopped before the server result was recorded. Check Outlook before retrying."
+                    .into();
+        }
+    }
 }
 
 /// Writes the options file (when the session has a data folder). Failures are logged and shown once.
+pub(crate) fn save_prefs_checked(s: &mut Session) -> Result<(), String> {
+    load_prefs(s);
+    let Some(path) = s.sync.prefs.path.clone() else {
+        return Ok(());
+    };
+    let mut data = s.sync.prefs.data.clone();
+    data.note = OPTIONS_NOTE.into();
+    let bytes = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_OPTIONS_BYTES {
+        return Err("Account options exceed the profile size limit".into());
+    }
+    write_private(&path, &bytes).map_err(|e| e.to_string())
+}
+
 pub(crate) fn save_prefs(s: &mut Session) {
     load_prefs(s);
     let Some(path) = s.sync.prefs.path.clone() else { return };
@@ -685,9 +721,12 @@ pub fn kind_label(s: &Session, a: &Account) -> &'static str {
 
 /// Drops the options and bookkeeping of a removed account.
 pub(crate) fn forget_options(s: &mut Session, id: AccountId) {
+    prefs(s).graph_writes.retain(|op| op.account != id);
     let p = prefs(s);
-    let had =
-        p.accounts.remove(&id.0).is_some() | p.pop3.remove(&id.0).is_some() | p.jmap.remove(&id.0).is_some();
+    let had = p.accounts.remove(&id.0).is_some()
+        | p.pop3.remove(&id.0).is_some()
+        | p.jmap.remove(&id.0).is_some()
+        | p.graph.remove(&id.0).is_some();
     if had {
         save_prefs(s);
     }
@@ -696,6 +735,9 @@ pub(crate) fn forget_options(s: &mut Session, id: AccountId) {
 fn options_json(o: &AccountOptions) -> Value {
     json!({
         "pop3": o.pop3,
+        "graphCalendars": o.graph_calendars,
+        "graphContacts": o.graph_contacts,
+        "graphEditing": o.graph_editing,
         "download": o.download.name(),
         "slowHeadersOnly": o.slow_headers_only,
         "downloadMonths": o.download_months,
@@ -746,13 +788,31 @@ pub(crate) fn apply_option_params(o: &mut AccountOptions, p: &Value) -> Result<b
     }
     let keep = opt_minutes(p, "removeAfterDays", MAX_KEEP_DAYS)?;
     let months = opt_minutes(p, "downloadMonths", MAX_DOWNLOAD_MONTHS)?;
-    let bools = ["slowHeadersOnly", "include", "push", "leaveOnServer", "removeWhenDeleted"];
+    let bools = [
+        "slowHeadersOnly",
+        "include",
+        "push",
+        "leaveOnServer",
+        "removeWhenDeleted",
+        "graphCalendars",
+        "graphContacts",
+        "graphEditing",
+    ];
     for b in bools {
         if p.get(b).is_some_and(|v| !v.is_boolean() && !v.is_null()) {
             return Err(CmdError::Params(format!("`{b}` must be true or false")));
         }
     }
     let before = o.clone();
+    if let Some(b) = opt_bool(p, "graphEditing") {
+        o.graph_editing = b;
+    }
+    if let Some(b) = opt_bool(p, "graphCalendars") {
+        o.graph_calendars = b;
+    }
+    if let Some(b) = opt_bool(p, "graphContacts") {
+        o.graph_contacts = b;
+    }
     if let Some(d) = download {
         o.download = d;
     }
@@ -815,7 +875,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "accounts.addShared",
             "Add shared or delegated mailbox",
-            r#"{"account": number|string (OAuth IMAP delegate), "address": string, "displayName"?: string, "delegated"?: bool, "sendAs"?: bool} (creates a mailbox requiring its own OAuth sign-in as the delegate; grants no server permissions)"#,
+            r#"{"account": number|string (OAuth IMAP or Graph delegate), "address": string, "displayName"?: string, "delegated"?: bool, "sendAs"?: bool} (creates a mailbox requiring its own OAuth sign-in as the delegate; grants no server permissions)"#,
             true,
             has_server_account,
             add_shared,
@@ -824,7 +884,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "accounts.add",
             "Add Account",
-            r#"{"kind": "imap"|"jmap", "address": string, "displayName"?: string, "senderName"?: string, "incoming": server, "outgoing"?: server, "password"?: string, "outgoingPassword"?: string, "oauthToken"?: string, "default"?: bool, "serverSavesSent"?: bool} where server = {"host", "port"?, "security"?, "username"?, "auth"?, "extraRootPem"?, "allowPlaintextAuth"?} (JMAP: host = session URL)"#,
+            r#"{"kind": "imap"|"pop3"|"jmap"|"graph", "address": string, "displayName"?: string, "senderName"?: string, "incoming": server, "outgoing"?: server, "password"?: string, "outgoingPassword"?: string, "oauthToken"?: string, "default"?: bool, "serverSavesSent"?: bool} where server = {"host", "port"?, "security"?, "username"?, "auth"?, "extraRootPem"?, "allowPlaintextAuth"?} (JMAP: host = session URL)"#,
             true,
             always,
             add,
@@ -864,7 +924,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "accounts.options",
             "More Settings",
-            r#"{"account"?: number|string, "mode"?: "full"|"headersThenFull"|"headers", "slowHeadersOnly"?: bool, "downloadMonths"?: number|null (first download: mail from the past N months; null or 0 = all), "include"?: bool (in the All Accounts Send/Receive group), "intervalMinutes"?: number|null (null = Options › Advanced), "push"?: bool, "pollMinutes"?: number, "leaveOnServer"?: bool, "removeAfterDays"?: number|null, "removeWhenDeleted"?: bool} (no option given: returns the options)"#,
+            r#"{"account"?: number|string, "mode"?: "full"|"headersThenFull"|"headers", "slowHeadersOnly"?: bool, "downloadMonths"?: number|null (first download: mail from the past N months; null or 0 = all), "include"?: bool (in the All Accounts Send/Receive group), "intervalMinutes"?: number|null (null = Options › Advanced), "push"?: bool, "pollMinutes"?: number, "leaveOnServer"?: bool, "removeAfterDays"?: number|null, "removeWhenDeleted"?: bool, "graphCalendars"?: bool, "graphContacts"?: bool} (no option given: returns the options)"#,
             false,
             has_server_account,
             options_cmd,
@@ -953,6 +1013,7 @@ pub(crate) fn kind_name(k: AccountKind) -> &'static str {
         AccountKind::Imap => "imap",
         AccountKind::Jmap => "jmap",
         AccountKind::Exchange => "exchange",
+        AccountKind::Graph => "graph",
     }
 }
 
@@ -1078,6 +1139,7 @@ fn parse_server(
     let default_port = match (smtp, security) {
         (false, Security::Tls) if pop3 => 995,
         (false, _) if pop3 => 110,
+        (false, _) if kind == AccountKind::Graph => 443,
         (false, Security::Tls) => 993,
         (false, _) => 143,
         (true, Security::Tls) => 465,
@@ -1125,8 +1187,11 @@ fn parse_kind(p: &Value) -> Result<(AccountKind, bool), CmdError> {
         Some("imap") => Ok((AccountKind::Imap, false)),
         Some("pop3" | "pop") => Ok((AccountKind::Imap, true)),
         Some("jmap") => Ok((AccountKind::Jmap, false)),
-        Some(other) => Err(CmdError::Params(format!("unknown account kind `{other}` (imap, pop3 or jmap)"))),
-        None => Err(CmdError::Params("`kind` (\"imap\", \"pop3\" or \"jmap\") required".into())),
+        Some("graph") => Ok((AccountKind::Graph, false)),
+        Some(other) => {
+            Err(CmdError::Params(format!("unknown account kind `{other}` (imap, pop3, jmap or graph)")))
+        }
+        None => Err(CmdError::Params("`kind` (\"imap\", \"pop3\", \"jmap\" or \"graph\") required".into())),
     }
 }
 
@@ -1199,8 +1264,18 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
         None => None,
     };
     let (secret_in, secret_out, cred) = parse_secrets(p)?;
+    if kind == AccountKind::Graph && (cred == Some(CredentialKind::Password) || outgoing.is_some()) {
+        return Err(CmdError::Params(
+            "Microsoft Graph uses OAuth and HTTPS, without an SMTP server or password.".into(),
+        ));
+    }
+
     load_prefs(s);
     let mut opts = s.sync.prefs.data.defaults.clone();
+    if kind == AccountKind::Graph {
+        opts.push = false;
+        opts.interval_minutes = Some(2);
+    }
     opts.pop3 = pop3;
     apply_option_params(&mut opts, p)?;
     // The first email account becomes the default unless told otherwise (a local data file never stays the
@@ -1215,8 +1290,12 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
         incoming: Some(incoming),
         outgoing,
         is_default: make_default,
-        credential: cred.unwrap_or_default(),
-        server_saves_sent: opt_bool(p, "serverSavesSent").unwrap_or(false),
+        credential: if kind == AccountKind::Graph {
+            CredentialKind::OAuthToken
+        } else {
+            cred.unwrap_or_default()
+        },
+        server_saves_sent: kind == AccountKind::Graph || opt_bool(p, "serverSavesSent").unwrap_or(false),
         ..Default::default()
     });
     s.mailbox.create_default_folders(id);
@@ -1228,6 +1307,7 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
     // Options of an earlier account with the same id are gone with it.
     prefs(s).pop3.remove(&id.0);
     prefs(s).jmap.remove(&id.0);
+    prefs(s).graph.remove(&id.0);
     update_options(s, id, |o| *o = opts);
     store_secrets(s, id, secret_in, secret_out)?;
     s.refresh_me();
@@ -1246,12 +1326,14 @@ fn add_shared(s: &mut Session, p: &Value) -> CmdResult {
     let owner = find_account(s, p, "account")?;
     let a =
         s.mailbox.account(owner).cloned().ok_or_else(|| CmdError::Params("no delegate account".into()))?;
-    if a.kind != AccountKind::Imap
+    if !matches!(a.kind, AccountKind::Imap | AccountKind::Graph)
         || a.credential != CredentialKind::OAuthToken
         || is_pop3(s, owner)
         || a.linked_mailbox.is_some()
     {
-        return Err(CmdError::Params("choose a personal IMAP account configured with OAuth first".into()));
+        return Err(CmdError::Params(
+            "choose a personal IMAP or Microsoft Graph account configured with OAuth first".into(),
+        ));
     }
     let address = clean_line("the mailbox address", str_field(p, &["address"])?.unwrap_or(""))?;
     if !valid_address(&address) {
@@ -1264,7 +1346,7 @@ fn add_shared(s: &mut Session, p: &Value) -> CmdResult {
     let mut incoming =
         a.incoming.clone().ok_or_else(|| CmdError::Params("the delegate has no incoming server".into()))?;
     incoming.username = address.clone();
-    incoming.auth = "XOAUTH2".into();
+    incoming.auth = if a.kind == AccountKind::Graph { "BEARER" } else { "XOAUTH2" }.into();
     let send_as = opt_bool(p, "sendAs").unwrap_or(false);
     let outgoing = if send_as {
         a.outgoing.clone().map(|mut server| {
@@ -1276,7 +1358,7 @@ fn add_shared(s: &mut Session, p: &Value) -> CmdResult {
         None
     };
     let id = s.mailbox.add_account(Account {
-        kind: AccountKind::Imap,
+        kind: a.kind,
         display_name: display,
         address: address.clone(),
         sender_name: String::new(),
@@ -1376,6 +1458,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     if reset {
         prefs(s).pop3.remove(&id.0);
         prefs(s).jmap.remove(&id.0);
+        prefs(s).graph.remove(&id.0);
     }
     if opts_changed || reset {
         update_options(s, id, |o| *o = opts);
@@ -1654,6 +1737,34 @@ fn oauth_sign_in(s: &mut Session, p: &Value) -> CmdResult {
         return Err(CmdError::Disabled("a data file has no mail server".into()));
     }
     let binding = oauth_binding(p)?;
+    if a.kind == AccountKind::Graph {
+        let options = account_options(s, id);
+        if options.graph_editing
+            && !["Calendars.ReadWrite.Shared", "Contacts.ReadWrite.Shared"].iter().all(|name| {
+                binding.scopes.iter().any(|scope| scope == &format!("https://graph.microsoft.com/{name}"))
+            })
+        {
+            return Err(CmdError::Params("Choose the Microsoft 365 editing provider and sign in again to allow calendar/contact changes.".into()));
+        }
+        let has = |names: &[&str]| {
+            binding.scopes.iter().any(|scope| {
+                scope.strip_prefix("https://graph.microsoft.com/").is_some_and(|name| names.contains(&name))
+            })
+        };
+        if (options.graph_calendars && !has(&["Calendars.Read.Shared", "Calendars.ReadWrite.Shared"]))
+            || (options.graph_contacts && !has(&["Contacts.Read.Shared", "Contacts.ReadWrite.Shared"]))
+        {
+            return Err(CmdError::Params("Choose the Microsoft 365 mail, calendars and contacts provider and sign in again to grant connected-service access.".into()));
+        }
+    }
+
+    if a.kind == AccountKind::Graph
+        && (!binding.scopes.iter().any(|scope| scope.starts_with("https://graph.microsoft.com/"))
+            || binding.scopes.iter().any(|scope| scope.starts_with("https://outlook.office.com/")))
+    {
+        return Err(CmdError::Params("Use the Microsoft 365 (Graph) provider for this account; IMAP/SMTP tokens cannot authorize Graph.".into()));
+    }
+
     let client_secret = match str_field(p, &["clientSecret", "client_secret"])? {
         Some(t) if !t.trim().is_empty() => Some(clean_line("the client secret", t)?),
         _ => None,

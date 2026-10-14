@@ -627,7 +627,24 @@ fn occ_interact(app: &mut App, st: &mut ModState, resp: &egui::Response, o: &Occ
             ui.close();
         }
         if read_only {
-            ui.label(RichText::new("Internet calendar (read-only)").color(app.theme.text_muted));
+            let (edit, respond) = mailcraft_engine::cmd::connected::capabilities(&app.s, id);
+            if (edit || respond)
+                && ui
+                    .button(if respond { "Respond on Microsoft 365" } else { "Edit on Microsoft 365" })
+                    .clicked()
+            {
+                app.run("graph.edit", json!({"id":id.0}));
+                ui.close();
+            }
+            let connected = app.s.mailbox.folder(o.folder).is_some_and(|f| f.graph_source.is_some());
+            ui.label(
+                RichText::new(if connected {
+                    "Microsoft 365 connected calendar"
+                } else {
+                    "Internet calendar (read-only)"
+                })
+                .color(app.theme.text_muted),
+            );
             return;
         }
         if recurring {
@@ -1031,7 +1048,10 @@ fn content(ui: &mut Ui, app: &mut App, st: &mut ModState, cu: &mut CalUi, look: 
         ui.painter().hline(rect.x_range(), strip.max.y, Stroke::new(1.0, app.theme.separator));
         top = strip.max.y + 1.0;
     }
-    let body = Rect::from_min_max(pos2(rect.min.x, top), rect.max);
+    let mut body = Rect::from_min_max(pos2(rect.min.x, top), rect.max);
+    if let Some(folder) = current_folder(app, Kind::Appointment) {
+        body = super::common::connected_strip(ui, app, folder, body);
+    }
     if body.height() < 40.0 || body.width() < 80.0 {
         return;
     }

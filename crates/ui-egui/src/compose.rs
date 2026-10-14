@@ -214,9 +214,18 @@ pub fn compose_windows(ctx: &egui::Context, app: &mut App) {
             continue;
         };
         let builder = ViewportBuilder::default()
-            .with_title(c.title())
+            .with_title(if app.mac_style {
+                if c.subject.trim().is_empty() { "New Message".to_owned() } else { c.subject.clone() }
+            } else {
+                c.title()
+            })
             .with_inner_size(if app.mac_style { [860.0, 680.0] } else { DEFAULT_SIZE })
             .with_min_inner_size(MIN_SIZE);
+        let builder = if cfg!(target_os = "macos") && app.mac_style {
+            builder.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false)
+        } else {
+            builder
+        };
         ctx.show_viewport_immediate(viewport_id(cid), builder, |ui, class| {
             compose_viewport(ui, app, cid, class)
         });
@@ -291,8 +300,14 @@ pub fn inline_compose(ui: &mut Ui, app: &mut App, id: u64) {
             mac_toolbar(ui, app, id);
         }
         header(ui, app, id);
-        attach::well(ui, app, id, if app.mac_style { MARGIN + NAME_BTN.x + GAP } else { WELL_INDENT });
+        if app.mac_style {
+            mac_signature(ui, app, id);
+        }
+        attach::well(ui, app, id, if app.mac_style { 28.0 } else { WELL_INDENT });
         separator(ui, app);
+        if app.mac_style {
+            mac_formatting(ui, app, id);
+        }
         let h = ui.available_height();
         let min_h = if h.is_finite() && h < 4000.0 { h.max(160.0) } else { 240.0 };
         panes::body_with_panes(ui, app, id, min_h, false);
@@ -349,16 +364,30 @@ fn compose_viewport(ui: &mut Ui, app: &mut App, cid: u64, class: ViewportClass) 
         if !app.s.composes.contains_key(&cid) {
             return;
         }
-        ui.add_space(8.0);
+        ui.add_space(if app.mac_style { 4.0 } else { 8.0 });
         header(ui, app, cid);
-        attach::well(ui, app, cid, if app.mac_style { MARGIN + NAME_BTN.x + GAP } else { WELL_INDENT });
+        if app.mac_style {
+            mac_signature(ui, app, cid);
+        }
+        attach::well(ui, app, cid, if app.mac_style { 28.0 } else { WELL_INDENT });
         separator(ui, app);
-        panes::body_with_panes(ui, app, cid, 0.0, true);
+        if app.mac_style {
+            mac_formatting(ui, app, cid);
+            egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 8)).show(ui, |ui| {
+                panes::body_with_panes(ui, app, cid, 0.0, true);
+            });
+        } else {
+            panes::body_with_panes(ui, app, cid, 0.0, true);
+        }
     });
 
     save_prompt(&ctx, app, cid);
     spelling::dialog(&ctx, app, cid);
     attach::save_as_dialog(&ctx, app, cid);
+
+    if app.mac_style && !embedded {
+        crate::dialogs::dialogs(&ctx, app);
+    }
 
     // F7 anywhere in the window (the body editor already took it when it has focus).
     let f7 = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F7));
@@ -587,6 +616,8 @@ fn field_edit(ui: &mut Ui, app: &mut App, cid: u64, f: Field, rect: Rect, label_
         .id(field_id(cid, f))
         .frame(egui::Frame::NONE)
         .text_color(app.theme.text)
+        .font(egui::FontId::proportional(if app.mac_style && f == Field::Subject { 15.0 } else { 13.0 }))
+        .hint_text(if app.mac_style && f == Field::Subject { "Add a subject" } else { "" })
         .vertical_align(Align::Center)
         .desired_width(edit_rect.width());
     let mut r = ui.put(edit_rect, te);
@@ -594,7 +625,13 @@ fn field_edit(ui: &mut Ui, app: &mut App, cid: u64, f: Field, rect: Rect, label_
         r = r.labelled_by(l);
     }
     claim_initial_focus(ui, cid, &r);
-    let line_col = if r.has_focus() { app.theme.accent } else { app.theme.separator };
+    let line_col = if r.has_focus() {
+        app.theme.accent.gamma_multiply(0.6)
+    } else if app.mac_style {
+        egui::Color32::TRANSPARENT
+    } else {
+        app.theme.separator
+    };
     ui.painter().line_segment(
         [pos2(rect.left(), rect.bottom() - 1.0), pos2(rect.right(), rect.bottom() - 1.0)],
         Stroke::new(1.0, line_col),
@@ -671,6 +708,10 @@ pub(crate) fn ribbon_command(
 
 /// Send + address rows + Subject (shared by windows and inline responses).
 fn header(ui: &mut Ui, app: &mut App, cid: u64) {
+    if app.mac_style {
+        mac_header(ui, app, cid);
+        return;
+    }
     let Some(c) = app.s.composes.get(&cid) else {
         return;
     };
@@ -746,46 +787,372 @@ fn header(ui: &mut Ui, app: &mut App, cid: u64) {
     }
 }
 
-/// Compact compose tools. Advanced formatting stays available on demand.
-fn mac_toolbar(ui: &mut Ui, app: &mut App, cid: u64) {
-    let params = json!({"compose": cid});
-    egui::Frame::new().fill(app.theme.chrome).inner_margin(10).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            if crate::widgets::icon_button(ui, app, "send", "Send", true).clicked() {
-                app.run("compose.send", params.clone());
-            }
-            if crate::widgets::icon_button(ui, app, "attach", "Attach", true).clicked() {
-                let ctx = ui.ctx().clone();
-                if !ribbon_command(&ctx, app, cid, "compose.attachFile", &params) {
-                    app.run("compose.attachFile", params.clone());
+/// Mac header: quiet labels, continuous row dividers, and a consistent writing inset.
+fn mac_header(ui: &mut Ui, app: &mut App, cid: u64) {
+    let Some(c) = app.s.composes.get(&cid) else {
+        return;
+    };
+    let cc_open = !c.cc.is_empty()
+        || ui.ctx().data(|d| d.get_temp::<bool>(Id::new(("mac-compose-cc", cid)))).unwrap_or(false);
+    let mut rows = vec![Field::From, Field::To];
+    if cc_open {
+        rows.push(Field::Cc);
+    }
+    if c.show_bcc {
+        rows.push(Field::Bcc);
+    }
+    rows.push(Field::Subject);
+    let accounts: Vec<(u32, String)> = app
+        .s
+        .mailbox
+        .accounts
+        .iter()
+        .filter(|a| !a.address.trim().is_empty())
+        .map(|a| (a.id.0, format!("{} <{}>", a.display_name, a.address)))
+        .collect();
+    let (rect, _) =
+        ui.allocate_exact_size(vec2(ui.available_width(), rows.len() as f32 * 38.0 + 8.0), Sense::hover());
+    for (i, f) in rows.into_iter().enumerate() {
+        let y = rect.top() + i as f32 * 38.0;
+        let label_rect = Rect::from_min_size(pos2(rect.left() + 24.0, y + 5.0), vec2(64.0, 28.0));
+        let trailing = if f == Field::To { 84.0 } else { 28.0 };
+        let field = Rect::from_min_max(pos2(rect.left() + 100.0, y), pos2(rect.right() - trailing, y + 38.0));
+        if f == Field::To {
+            let r = ui.put(
+                Rect::from_min_size(pos2(rect.right() - 80.0, y + 5.0), vec2(56.0, 28.0)),
+                egui::Button::new(egui::RichText::new("Cc/Bcc").size(11.0).color(app.theme.text_muted))
+                    .frame(false),
+            );
+            egui::Popup::menu(&r).show(|ui| {
+                if ui.selectable_label(cc_open, "Show Cc").clicked() {
+                    ui.ctx().data_mut(|d| d.insert_temp(Id::new(("mac-compose-cc", cid)), !cc_open));
+                    ui.close();
                 }
-            }
-            ui.menu_button("Message", |ui| {
-                for (label, cmd) in [
-                    ("Save draft", "compose.saveDraft"),
-                    ("Show Bcc", "compose.showBcc"),
-                    ("Check spelling", "review.spelling"),
-                ] {
-                    if ui.button(label).clicked() {
-                        let ctx = ui.ctx().clone();
-                        if !ribbon_command(&ctx, app, cid, cmd, &params) {
-                            app.run(cmd, params.clone());
-                        }
-                        ui.close();
-                    }
+                if ui.button("Show Bcc").clicked() {
+                    app.run("compose.showBcc", json!({"compose":cid}));
+                    ui.close();
                 }
             });
-            let id = Id::new(("mac-compose-format", cid));
-            let mut show = ui.ctx().data_mut(|d| d.get_temp::<bool>(id)).unwrap_or(false);
-            if ui.selectable_label(show, "Formatting").clicked() {
-                show = !show;
-                ui.ctx().data_mut(|d| d.insert_temp(id, show));
+        }
+        let label = egui::RichText::new(f.label()).size(12.0).color(app.theme.text_muted);
+        let response = if f == Field::Subject {
+            ui.put(label_rect, egui::Label::new(label))
+        } else {
+            ui.put(label_rect, egui::Button::new(label).frame(false))
+        };
+        if f == Field::From {
+            egui::Popup::menu(&response).show(|ui| {
+                for (id, label) in &accounts {
+                    if ui.button(label).clicked() {
+                        app.run("compose.setFrom", json!({"compose": cid, "value": id.to_string()}));
+                    }
+                }
+                if accounts.is_empty() {
+                    ui.label("No accounts");
+                }
+            });
+            app.icons.paint(
+                ui,
+                Rect::from_center_size(
+                    pos2(label_rect.right() - 1.0, label_rect.center().y),
+                    vec2(10.0, 10.0),
+                ),
+                "chevron-down",
+                app.theme.text_muted,
+            );
+        } else if f != Field::Subject && response.clicked() {
+            app.run("compose.addressBook", json!({"compose":cid, "field":f.book_field()}));
+        }
+        match f {
+            Field::To | Field::Cc | Field::Bcc => {
+                recipients::address_field(ui, app, cid, f, field, Some(response.id))
+            }
+            _ => field_edit(ui, app, cid, f, field, Some(response.id)),
+        }
+        if f != Field::Subject {
+            ui.painter().hline(
+                rect.left() + 28.0..=rect.right() - 28.0,
+                y + 38.0,
+                Stroke::new(0.5, app.theme.separator.gamma_multiply(0.65)),
+            );
+        }
+    }
+}
+
+/// Compact toolbar with an explicit primary action and quiet secondary tools.
+fn mac_action(ui: &mut Ui, app: &mut App, icon: &str, label: &str, primary: bool) -> egui::Response {
+    let w = if primary { if ui.available_width() < 240.0 { 38.0 } else { 82.0 } } else { 78.0 };
+    let (rect, r) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
+    r.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
+    let fill = if primary {
+        app.theme.accent
+    } else if r.hovered() {
+        app.theme.hover
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, 7, fill);
+    if r.has_focus() {
+        ui.painter().rect_stroke(
+            rect.expand(2.0),
+            8,
+            Stroke::new(1.0, app.theme.accent),
+            StrokeKind::Outside,
+        );
+    }
+    let ink = if primary {
+        if app.theme.dark { egui::Color32::from_rgb(24, 31, 40) } else { egui::Color32::WHITE }
+    } else {
+        app.theme.text
+    };
+    app.icons.paint(
+        ui,
+        Rect::from_center_size(rect.left_center() + vec2(18.0, 0.0), vec2(14.0, 14.0)),
+        icon,
+        ink,
+    );
+    if w >= 60.0 {
+        ui.painter().text(
+            rect.left_center() + vec2(32.0, 0.0),
+            Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(12.0),
+            ink,
+        );
+    }
+    r
+}
+
+fn mac_toolbar(ui: &mut Ui, app: &mut App, cid: u64) {
+    let params = json!({"compose": cid});
+    let width = ui.available_width();
+    let native = cfg!(target_os = "macos")
+        && !ui.ctx().embed_viewports()
+        && ui.ctx().viewport_id() == viewport_id(cid);
+    let left = if native { 96 } else { 20 };
+    if native {
+        let rect = Rect::from_min_size(ui.cursor().min, vec2(width, 54.0));
+        if ui.interact(rect, ui.id().with(("compose-drag", cid)), Sense::drag()).drag_started() {
+            ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+        }
+    }
+    egui::Frame::new()
+        .fill(app.theme.chrome)
+        .inner_margin(egui::Margin { left, right: 20, top: 12, bottom: 12 })
+        .show(ui, |ui| {
+            ui.set_width((width - f32::from(left) - 20.0).max(120.0));
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.horizontal(|ui| {
+                if mac_action(ui, app, "send", "Send", true).on_hover_text("Send message · ⌘Return").clicked()
+                {
+                    app.run("compose.send", params.clone());
+                }
+                if crate::widgets::icon_only(ui, app, "attach", "Attach", true).clicked() {
+                    let ctx = ui.ctx().clone();
+                    if !ribbon_command(&ctx, app, cid, "compose.attachFile", &params) {
+                        app.run("compose.attachFile", params.clone());
+                    }
+                }
+                let id = Id::new(("mac-compose-format", cid));
+                let mut show = ui.ctx().data_mut(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+                if crate::widgets::icon_toggle(ui, app, "font-color", "Formatting", show, 30.0).clicked() {
+                    show = !show;
+                    ui.ctx().data_mut(|d| d.insert_temp(id, show));
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.menu_button("More", |ui| {
+                        ui.menu_button("All tools", |ui| crate::ribbon::compose_tools_menu(ui, app, cid));
+                        ui.separator();
+                        for (label, cmd) in [
+                            ("Save draft", "compose.saveDraft"),
+                            ("Show Bcc", "compose.showBcc"),
+                            ("Check spelling", "review.spelling"),
+                        ] {
+                            if ui.button(label).clicked() {
+                                let ctx = ui.ctx().clone();
+                                if !ribbon_command(&ctx, app, cid, cmd, &params) {
+                                    app.run(cmd, params.clone());
+                                }
+                                ui.close();
+                            }
+                        }
+                    });
+                    if ui.available_width() > 100.0 {
+                        let dirty = app.s.composes.get(&cid).is_some_and(|c| c.dirty);
+                        ui.label(
+                            egui::RichText::new(if dirty { "Edited" } else { "Draft" })
+                                .size(11.0)
+                                .color(app.theme.text_muted),
+                        );
+                    }
+                });
+            });
+        });
+    separator(ui, app);
+}
+
+/// A persistent signature choice, independent of whether formatting tools are shown.
+fn mac_signature(ui: &mut Ui, app: &mut App, cid: u64) {
+    let current = app.s.composes.get(&cid).and_then(|c| c.signature.as_ref()).map(|s| s.name.clone());
+    let names: Vec<String> = app.s.mailbox.signatures.iter().map(|s| s.name.clone()).collect();
+    let width = ui.available_width();
+    egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 5)).show(ui, |ui| {
+        ui.set_width((width - 48.0).max(180.0));
+        ui.allocate_ui_with_layout(
+            vec2((width - 48.0).max(180.0), 26.0),
+            Layout::right_to_left(Align::Center),
+            |ui| {
+                let response = egui::ComboBox::from_id_salt(("mac-signature", cid))
+                    .selected_text(current.as_deref().unwrap_or("None"))
+                    .width(142.0)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(current.is_none(), "None").clicked() {
+                            app.run("compose.signature", json!({"compose":cid,"name":"none"}));
+                        }
+                        for name in &names {
+                            if ui.selectable_label(current.as_deref() == Some(name.as_str()), name).clicked()
+                            {
+                                app.run("compose.signature", json!({"compose":cid,"name":name}));
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Edit signatures…").clicked() {
+                            let ctx = ui.ctx().clone();
+                            ribbon_command(
+                                &ctx,
+                                app,
+                                cid,
+                                "options.open",
+                                &json!({"compose":cid,"page":"signatures"}),
+                            );
+                        }
+                    })
+                    .response;
+                response.widget_info(|| WidgetInfo::labeled(WidgetType::ComboBox, true, "Signature"));
+                ui.label(egui::RichText::new("Signature").size(11.0).color(app.theme.text_muted));
+            },
+        );
+    });
+}
+
+/// Everyday rich-text tools, in one slim row that wraps on smaller windows.
+fn mac_formatting(ui: &mut Ui, app: &mut App, cid: u64) {
+    if !ui.ctx().data(|d| d.get_temp::<bool>(Id::new(("mac-compose-format", cid)))).unwrap_or(false) {
+        return;
+    }
+    let Some(c) = app.s.composes.get(&cid) else {
+        return;
+    };
+    if c.format == mailcraft_model::BodyFormat::PlainText {
+        ui.horizontal(|ui| {
+            ui.add_space(24.0);
+            ui.label(egui::RichText::new("Plain text").size(12.0).color(app.theme.text_muted));
+            if ui.button("Use rich text").clicked() {
+                app.run("compose.format", json!({"compose":cid,"kind":"html"}));
             }
         });
-    });
-    if ui.ctx().data_mut(|d| d.get_temp::<bool>(Id::new(("mac-compose-format", cid)))).unwrap_or(false) {
-        let frame = Frame::compute(ui.available_width(), ui.available_height());
-        tab_row(ui, app, cid);
-        crate::ribbon::ribbon(ui, app, Surface::Compose(cid), &frame);
+        separator(ui, app);
+        return;
     }
+    let style = c.style_at_caret();
+    let family = style
+        .font_family
+        .clone()
+        .or_else(|| c.body.base.font_family.clone())
+        .unwrap_or_else(|| "Inter".to_owned());
+    let pt = style.size_pt.or(c.body.base.size_pt).unwrap_or(11.0);
+    let width = ui.available_width();
+    egui::Frame::new()
+        .fill(app.theme.chrome.gamma_multiply(0.65))
+        .inner_margin(egui::Margin::symmetric(24, 7))
+        .show(ui, |ui| {
+            ui.set_width((width - 48.0).max(180.0));
+            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.spacing_mut().interact_size.y = 26.0;
+            ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::NONE;
+            ui.horizontal_wrapped(|ui| {
+                egui::ComboBox::from_id_salt(("mac-font", cid))
+                    .selected_text(&family)
+                    .width(112.0)
+                    .show_ui(ui, |ui| {
+                        for font in
+                            ["Inter", "Carlito", "Liberation Sans", "Liberation Serif", "Liberation Mono"]
+                        {
+                            if ui.selectable_label(font == family, font).clicked() {
+                                app.run("format.font", json!({"compose":cid,"family":font}));
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Font family");
+                egui::ComboBox::from_id_salt(("mac-font-size", cid))
+                    .selected_text(format!("{pt:.0}"))
+                    .width(42.0)
+                    .show_ui(ui, |ui| {
+                        for size in [9, 10, 11, 12, 14, 16, 18, 24, 36] {
+                            if ui.selectable_label(pt == size as f32, size.to_string()).clicked() {
+                                app.run("format.fontSize", json!({"compose":cid,"pt":size}));
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Font size");
+                ui.add_space(7.0);
+                for (icon, label, command, on) in [
+                    ("bold", "Bold", "format.bold", style.bold == Some(true)),
+                    ("italic", "Italic", "format.italic", style.italic == Some(true)),
+                    ("underline", "Underline", "format.underline", style.underline == Some(true)),
+                ] {
+                    if crate::widgets::icon_toggle(ui, app, icon, label, on, 27.0).clicked() {
+                        app.run(command, json!({"compose":cid}));
+                    }
+                }
+                ui.add_space(7.0);
+                ui.menu_button("Paragraph", |ui| {
+                    for (label, command, extra) in [
+                        ("Align left", "format.align", json!({"kind":"left"})),
+                        ("Center", "format.align", json!({"kind":"center"})),
+                        ("Align right", "format.align", json!({"kind":"right"})),
+                        ("Bulleted list", "format.bullets", json!({})),
+                        ("Numbered list", "format.numbering", json!({})),
+                        ("Increase indent", "format.indent", json!({})),
+                        ("Decrease indent", "format.outdent", json!({})),
+                    ] {
+                        if ui.button(label).clicked() {
+                            let mut params = extra;
+                            if let Some(object) = params.as_object_mut() {
+                                object.insert("compose".to_owned(), json!(cid));
+                            }
+                            app.run(command, params);
+                            ui.close();
+                        }
+                    }
+                });
+                ui.menu_button("Insert", |ui| {
+                    for (label, command) in [
+                        ("Link…", "insert.link"),
+                        ("Table…", "insert.table"),
+                        ("Picture…", "insert.picture"),
+                        ("Horizontal line", "insert.horizontalLine"),
+                    ] {
+                        if ui.button(label).clicked() {
+                            app.run(command, json!({"compose":cid}));
+                            ui.close();
+                        }
+                    }
+                });
+                ui.menu_button("Text", |ui| {
+                    for (label, command) in [
+                        ("Font and color…", "format.fontDialog"),
+                        ("Clear formatting", "format.clearFormatting"),
+                    ] {
+                        if ui.button(label).clicked() {
+                            app.run(command, json!({"compose":cid}));
+                            ui.close();
+                        }
+                    }
+                });
+            });
+        });
+    separator(ui, app);
 }

@@ -169,6 +169,7 @@ fn kind_name(k: AccountKind) -> &'static str {
         AccountKind::Imap => "imap",
         AccountKind::Jmap => "jmap",
         AccountKind::Exchange => "exchange",
+        AccountKind::Graph => "graph",
     }
 }
 
@@ -213,6 +214,20 @@ fn mail_folder(s: &Session, p: &Value) -> Result<FolderId, CmdError> {
         Some(folder) => Err(CmdError::Params(format!("\"{}\" is not a mail folder", folder.name))),
         None => Err(CmdError::Params(format!("no such folder {}", f.0))),
     }
+}
+
+fn import_mail_folder(s: &Session, p: &Value) -> Result<FolderId, CmdError> {
+    let folder = mail_folder(s, p)?;
+    if s.mailbox
+        .folder_account(folder)
+        .and_then(|id| s.mailbox.account(id))
+        .is_some_and(|a| a.kind == AccountKind::Graph)
+    {
+        return Err(CmdError::Disabled(
+            "Import mail into a local account first; Graph message uploads are not implemented yet.".into(),
+        ));
+    }
+    Ok(folder)
 }
 
 fn store_err(e: mailcraft_store::StoreError) -> CmdError {
@@ -267,7 +282,7 @@ fn open_export(s: &mut Session, p: &Value) -> CmdResult {
     let now = s.now();
     match action {
         "importEml" => {
-            let folder = mail_folder(s, p)?;
+            let folder = import_mail_folder(s, p)?;
             let id = match s.store.as_mut() {
                 Some(st) => st.import_eml(&mut s.mailbox, &path, folder).map_err(store_err)?,
                 None => {
@@ -278,14 +293,14 @@ fn open_export(s: &mut Session, p: &Value) -> CmdResult {
             Ok(json!({"imported": 1, "ids": [id.0], "folder": folder.0}))
         }
         "importMsg" => {
-            let folder = mail_folder(s, p)?;
+            let folder = import_mail_folder(s, p)?;
             let data = crate::cmd::rules::read_file_capped(&path, MAX_IMPORT_FILE)?;
             let item = mailcraft_formats::msg::read_item(&data, folder, now).map_err(format_err)?;
             let id = mailcraft_store::import::insert_item(&mut s.mailbox, item).map_err(store_err)?;
             Ok(json!({"imported": 1, "ids": [id.0], "folder": folder.0}))
         }
         "importMbox" | "importMaildir" => {
-            let folder = mail_folder(s, p)?;
+            let folder = import_mail_folder(s, p)?;
             let ids = if action == "importMbox" {
                 mailcraft_store::import_mbox(&mut s.mailbox, &path, folder)
             } else {

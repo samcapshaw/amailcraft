@@ -8,6 +8,7 @@ pub mod app;
 pub mod calendar;
 pub mod categories;
 pub mod compose;
+pub mod connected;
 pub mod file;
 pub mod folder;
 pub mod format;
@@ -43,6 +44,7 @@ pub fn all_specs() -> Vec<crate::CommandSpec> {
     v.extend(view::specs());
     v.extend(search::specs());
     v.extend(compose::specs());
+    v.extend(connected::specs());
     v.extend(format::specs());
     v.extend(insert::specs());
     v.extend(review::specs());

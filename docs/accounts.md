@@ -1,7 +1,7 @@
 # Mail accounts
 
 MailCraft talks to mail servers over open protocols only: IMAP and POP3 for incoming mail, SMTP for sending,
-and JMAP for both. Exchange (EWS) is not supported. In the Mac shell, open **More → Accounts** or **Manage accounts…** in the sidebar, then **Add account**.
+and JMAP for both. Microsoft 365 Graph mail is available as a separate HTTPS/OAuth account type; see [setup and limits](microsoft365.md). Exchange EWS is not supported. In the Mac shell, open **More → Accounts** or **Manage accounts…** in the sidebar, then **Add account**.
 The classic shell also offers **File → Add Account**; both use `accounts.add`. For development, use
 the local test servers (`mailcraft-testmail`) and synthetic mail.
 

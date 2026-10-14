@@ -174,6 +174,12 @@ fn display_id() -> egui::Id {
     egui::Id::new("mc-display-settings")
 }
 
+pub(crate) fn invalidate_display_style(ctx: &egui::Context) {
+    let mut state = ctx.data_mut(|d| d.get_temp::<DisplayApplied>(display_id())).unwrap_or_default();
+    state.animations = None;
+    ctx.data_mut(|d| d.insert_temp(display_id(), state));
+}
+
 /// General › Theme "Use system setting" (follows the system's light/dark preference) and Advanced › "Use
 /// animations when expanding conversations and groups".
 fn apply_display_settings(ctx: &egui::Context, app: &mut App) {
@@ -1261,6 +1267,14 @@ fn pane(
 
 /// A drag handle over the gap `rect`; returns the drag delta along its axis.
 fn splitter(ui: &mut Ui, salt: &str, rect: Rect, horizontal_drag: bool, theme: &Theme) -> f32 {
+    // Keep the pane boundary visible at rest, including on equal dark surfaces.
+    if theme.mac_style {
+        if horizontal_drag {
+            ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0, theme.separator));
+        } else {
+            ui.painter().hline(rect.x_range(), rect.center().y, Stroke::new(1.0, theme.separator));
+        }
+    }
     let resp = ui.interact(rect, ui.id().with(salt), Sense::drag());
     if resp.hovered() || resp.dragged() {
         ui.ctx().set_cursor_icon(if horizontal_drag {
@@ -1329,8 +1343,8 @@ fn mail_panes(ui: &mut Ui, app: &mut App, frame: &Frame, area: Rect) {
     let saved_frac = saved("state.listFractionPermille").map(|p| p / 1000.0);
     let (mut folder_w, mut list_w, mut list_frac) = with_shell(&ctx, |st| {
         (
-            st.folder_w.or(saved_folder).unwrap_or(size::FOLDER_PANE),
-            st.list_w.or(saved_list).unwrap_or(if app.mac_style { 350.0 } else { size::LIST }),
+            st.folder_w.or(saved_folder).unwrap_or(if app.mac_style { 270.0 } else { size::FOLDER_PANE }),
+            st.list_w.or(saved_list).unwrap_or(if app.mac_style { 440.0 } else { size::LIST }),
             st.list_frac.or(saved_frac).unwrap_or(size::BOTTOM_LIST_FRACTION),
         )
     });

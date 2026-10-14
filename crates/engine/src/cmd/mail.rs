@@ -133,7 +133,7 @@ pub(crate) fn param_folder(s: &Session, p: &Value) -> Result<Option<FolderId>, C
 /// List order of the selected folder (newest first), used to pick the neighbour after items leave it.
 fn list_order(s: &Session) -> Vec<ItemId> {
     let mut items = if s.view.unified_inbox {
-        crate::queries::inbox_items(s)
+        crate::queries::aggregate_items(s)
     } else {
         s.mailbox.items_in(s.selection.folder)
     };
@@ -148,7 +148,7 @@ fn reselect(s: &mut Session, order_before: &[ItemId]) {
     let present = |s: &Session, id: &ItemId| {
         s.mailbox.mail.get(id).is_some_and(|m| {
             if s.view.unified_inbox {
-                s.mailbox.folder(m.folder).is_some_and(|f| f.role == Some(FolderRole::Inbox))
+                s.mailbox.folder(m.folder).is_some_and(|f| f.role == Some(crate::queries::aggregate_role(s)))
             } else {
                 m.folder == folder
             }
@@ -183,6 +183,17 @@ fn reselect(s: &mut Session, order_before: &[ItemId]) {
 
 /// Moves `ids` to `to`, journals, reselects; returns the moved ids.
 fn move_and_reselect(s: &mut Session, ids: &[ItemId], to: FolderId) -> Result<Vec<ItemId>, CmdError> {
+    if let Some(target) = s.mailbox.folder(to)
+        && s.mailbox.account(target.account).is_some_and(|a| a.kind == AccountKind::Graph)
+        && (target.remote_name.is_none()
+            || ids.iter().any(|id| {
+                s.mailbox.mail.get(id).is_some_and(|m| {
+                    m.remote_id.is_none() || s.mailbox.folder_account(m.folder) != Some(target.account)
+                })
+            }))
+    {
+        return Err(CmdError::Disabled("Graph can move synchronized messages within the same mailbox; uploading mail from another folder or account is not implemented yet.".into()));
+    }
     let order = list_order(s);
     let moved = s.mailbox.move_items(ids, to)?;
     journal(s, &moved);
@@ -982,6 +993,15 @@ fn copy_to_folder(s: &mut Session, p: &Value) -> CmdResult {
     let Some(folder) = param_folder(s, p)? else {
         return open_dialog(s, "copyToFolder", json!({"ids": ids_json(&ids)}));
     };
+    if s.mailbox
+        .folder_account(folder)
+        .and_then(|id| s.mailbox.account(id))
+        .is_some_and(|a| a.kind == AccountKind::Graph)
+    {
+        return Err(CmdError::Disabled(
+            "Uploading copied messages to Microsoft Graph is not implemented yet.".into(),
+        ));
+    }
     match s.mailbox.folder(folder) {
         Some(f) if f.kind == FolderKind::Mail => {}
         Some(f) => return Err(CmdError::Failed(format!("mail items cannot be copied into \"{}\"", f.name))),
@@ -1172,7 +1192,7 @@ fn mark_all_read(s: &mut Session, p: &Value) -> CmdResult {
     let explicit = param_folder(s, p)?;
     let folder = explicit.unwrap_or(s.selection.folder);
     let items = if s.view.unified_inbox && explicit.is_none() {
-        crate::queries::inbox_items(s)
+        crate::queries::aggregate_items(s)
     } else {
         s.mailbox.items_in(folder)
     };

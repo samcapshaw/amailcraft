@@ -65,6 +65,7 @@ pub(super) enum Incoming {
     Imap(ImapSettings),
     Pop3(Pop3Settings),
     Jmap(super::jmap::JmapConn),
+    Graph(mailcraft_net::graph::GraphConn),
 }
 
 /// What a worker needs to refresh an OAuth access token.
@@ -96,6 +97,7 @@ impl Conn {
             Incoming::Imap(i) => swap(&mut i.credentials),
             Incoming::Pop3(p) => swap(&mut p.credentials),
             Incoming::Jmap(j) => j.set_bearer(token),
+            Incoming::Graph(g) => g.set_bearer(token),
         }
         if let Some(c) = self.smtp.as_mut().and_then(|s| s.credentials.as_mut()) {
             swap(c);
@@ -138,6 +140,7 @@ struct Job {
     fetch: Vec<(String, Vec<u32>)>,
     pop3: Option<Pop3Job>,
     jmap: Option<super::jmap::JmapJob>,
+    graph: Option<super::graph::GraphJob>,
 }
 
 /// What a worker listens to between jobs.
@@ -241,6 +244,15 @@ pub(super) enum Event {
         present: Vec<String>,
         deleted: Vec<String>,
     },
+    GraphWrite {
+        account: AccountId,
+        id: u64,
+        result: Result<(), String>,
+    },
+    GraphPim {
+        account: AccountId,
+        snapshot: super::graph_pim::Snapshot,
+    },
     Jmap {
         account: AccountId,
         ev: super::jmap::JmapEvent,
@@ -278,6 +290,8 @@ impl Event {
             | Event::Pop3New { account, .. }
             | Event::Pop3Full { account, .. }
             | Event::Pop3Server { account, .. }
+            | Event::GraphWrite { account, .. }
+            | Event::GraphPim { account, .. }
             | Event::Jmap { account, .. }
             | Event::Tokens { account, .. }
             | Event::OAuthPrompt { account, .. }
@@ -473,11 +487,24 @@ pub(super) fn conn_settings(s: &Session, a: &Account) -> Result<Conn, String> {
     if inc.host.trim().is_empty() {
         return Err("The account has no incoming mail server.".into());
     }
-    let secret = account_secret(s, a.id, false)
-        .ok_or_else(|| format!("Enter the password for {} (Account Settings).", a.address))?;
+    let secret = account_secret(s, a.id, false).ok_or_else(|| {
+        if a.kind == AccountKind::Graph {
+            format!("Sign in to Microsoft 365 for {} (Accounts).", a.address)
+        } else {
+            format!("Enter the password for {} (Account Settings).", a.address)
+        }
+    })?;
     let user = if inc.username.is_empty() { a.address.clone() } else { inc.username.clone() };
     let creds = credentials(a, &user, secret);
-    let incoming = if a.kind == AccountKind::Jmap {
+    let incoming = if a.kind == AccountKind::Graph {
+        let Credentials::OAuth2 { access_token, .. } = &creds else {
+            return Err("Microsoft Graph requires OAuth sign-in.".into());
+        };
+        Incoming::Graph(
+            mailcraft_net::graph::GraphConn::new(&inc.host, &a.address, access_token, connect_options(inc)?)
+                .map_err(|e| e.to_string())?,
+        )
+    } else if a.kind == AccountKind::Jmap {
         Incoming::Jmap(super::jmap::JmapConn::new(&inc.host, &creds, connect_options(inc)?))
     } else if crate::accounts::is_pop3(s, a.id) {
         let mut p = Pop3Settings::from_server(inc, creds);
@@ -489,7 +516,7 @@ pub(super) fn conn_settings(s: &Session, a: &Account) -> Result<Conn, String> {
         Incoming::Imap(imap)
     };
     let smtp = match &a.outgoing {
-        Some(o) if !o.host.trim().is_empty() && a.kind != AccountKind::Jmap => {
+        Some(o) if !o.host.trim().is_empty() && !matches!(a.kind, AccountKind::Jmap | AccountKind::Graph) => {
             let mut st = SmtpSettings::new(o.host.clone(), o.port, o.security);
             st.auth_mechanism = o.auth.clone();
             st.options = connect_options(o)?;
@@ -531,7 +558,7 @@ pub(super) fn jmap_push_target(s: &Session, id: AccountId) -> Option<PushTarget>
 /// Outbox messages due for sending, oldest first.
 fn outgoing_items(s: &Session, a: &Account, plan: &Plan, now: i64) -> Vec<Outgoing> {
     let mut outgoing = Vec::new();
-    let can = a.outgoing.is_some() || a.kind == AccountKind::Jmap;
+    let can = a.can_send();
     if !plan.send || !can {
         return outgoing;
     }
@@ -708,7 +735,7 @@ fn pop3_job(
 pub(super) fn dispatch(s: &mut Session, id: AccountId, plan: Plan) -> Result<bool, String> {
     let Some(a) = s.mailbox.account(id).cloned() else { return Ok(false) };
     match a.kind {
-        AccountKind::Imap | AccountKind::Jmap => {}
+        AccountKind::Imap | AccountKind::Jmap | AccountKind::Graph => {}
         AccountKind::Local | AccountKind::Exchange => return Ok(false),
     }
     if let Some(run) = s.sync.runs.get_mut(&id)
@@ -740,6 +767,7 @@ pub(super) fn dispatch(s: &mut Session, id: AccountId, plan: Plan) -> Result<boo
         fetch: Vec::new(),
         pop3: None,
         jmap: None,
+        graph: None,
     };
     match &mut job.conn.incoming {
         Incoming::Imap(settings) => {
@@ -756,6 +784,7 @@ pub(super) fn dispatch(s: &mut Session, id: AccountId, plan: Plan) -> Result<boo
             job.pop3 = pop3_job(s, &a, plan.receive, force_headers || slow, &fetch_items, now);
         }
         Incoming::Jmap(_) => job.jmap = super::jmap::build_job(s, &a, &plan, window),
+        Incoming::Graph(_) => job.graph = super::graph::build_job(s, &a, &plan)?,
     }
     if job.ops.is_empty()
         && job.outgoing.is_empty()
@@ -763,6 +792,7 @@ pub(super) fn dispatch(s: &mut Session, id: AccountId, plan: Plan) -> Result<boo
         && job.fetch.is_empty()
         && job.pop3.is_none()
         && job.jmap.is_none()
+        && job.graph.is_none()
     {
         s.sync.fetch.remove(&id);
         s.sync.force_headers.remove(&id);
@@ -772,9 +802,20 @@ pub(super) fn dispatch(s: &mut Session, id: AccountId, plan: Plan) -> Result<boo
         ops: job.ops.iter().map(|(i, _, _)| *i).collect(),
         sending: job.outgoing.iter().map(|o| o.item).collect(),
     };
-    let receiving = job.receive.is_some() || !job.ops.is_empty() || job.pop3.is_some() || job.jmap.is_some();
+    let receiving = job.receive.is_some()
+        || !job.ops.is_empty()
+        || job.pop3.is_some()
+        || job.jmap.is_some()
+        || job.graph.is_some();
     let progress = if receiving || !job.fetch.is_empty() { "Connecting…" } else { "Sending…" };
-    s.sync.rt.submit(id, job)?;
+    if let Some(graph) = job.graph.as_ref() {
+        crate::cmd::connected::claim(s, id, &graph.writes)?;
+    }
+    if let Err(error) = s.sync.rt.submit(id, job) {
+        crate::cmd::connected::settle(s, id);
+        crate::accounts::save_prefs(s);
+        return Err(error);
+    }
     s.sync.fetch.remove(&id);
     s.sync.force_headers.remove(&id);
     let run = s.sync.runs.entry(id).or_default();
@@ -1170,6 +1211,12 @@ fn run_job(
             }
             run_pop3(account, &settings, job, events, cancel, &mut meter)
         }
+        Incoming::Graph(conn) => {
+            if let Some(mut old) = slot.take() {
+                old.disconnect();
+            }
+            super::graph::run(account, &conn, job.graph.as_ref(), &job.outgoing, events, cancel)
+        }
         Incoming::Jmap(conn) => {
             if let Some(mut old) = slot.take() {
                 old.disconnect();
@@ -1544,6 +1591,18 @@ fn run_test(account: AccountId, conn: Result<Conn, String>) -> TestReport {
         return r;
     }
     match &conn.incoming {
+        Incoming::Graph(g) => {
+            match g.connect().and_then(|client| client.well_known_folder("inbox")) {
+                Ok(_) => {
+                    r.incoming_ok = true;
+                    r.incoming = "Signed in to Microsoft Graph.".into();
+                    r.outgoing =
+                        "Sending uses Microsoft Graph; server permissions are checked when sending.".into();
+                }
+                Err(error) => r.incoming = error.to_string(),
+            }
+            return r;
+        }
         Incoming::Jmap(j) => {
             match j.connect() {
                 Ok(_) => {
@@ -1791,6 +1850,7 @@ pub(super) fn poll_events(s: &mut Session) -> bool {
                 | Event::Bodies { .. }
                 | Event::Pop3New { .. }
                 | Event::Pop3Full { .. }
+                | Event::GraphPim { .. }
                 | Event::Jmap { .. }
                 | Event::OAuthDone { .. }
         )
@@ -1877,6 +1937,10 @@ fn apply_all(s: &mut Session, events: Vec<Event>) {
             Event::Pop3Server { account, present, deleted } => {
                 apply_pop3_server(s, account, &present, &deleted)
             }
+            Event::GraphWrite { account, id, result } => {
+                crate::cmd::connected::finish(s, account, id, result)
+            }
+            Event::GraphPim { account, snapshot } => super::graph_pim::apply(s, account, snapshot),
             Event::Jmap { account, ev } => super::jmap::apply(s, account, ev, &mut new_inbox),
             Event::Tokens { account, tokens } => store_tokens(s, account, &tokens),
             Event::OAuthPrompt { account, prompt } => {
@@ -1914,6 +1978,7 @@ fn apply_all(s: &mut Session, events: Vec<Event>) {
     prune_stale_ops(&mut s.mailbox, &inflight);
     for ev in done {
         if let Event::Done { account, error } = ev {
+            crate::cmd::connected::settle(s, account);
             run_done(s, account, error);
         }
     }
@@ -2189,13 +2254,17 @@ fn message_sent(s: &mut Session, account: AccountId, item: ItemId, result: Resul
                 return;
             }
             // JMAP servers file the sent copy themselves (EmailSubmission onSuccessUpdateEmail).
-            let saves = s
-                .mailbox
-                .account(account)
-                .is_some_and(|a| a.server_saves_sent || a.kind == AccountKind::Jmap);
+            let saves = s.mailbox.account(account).is_some_and(|a| {
+                a.server_saves_sent || matches!(a.kind, AccountKind::Jmap | AccountKind::Graph)
+            });
             let sent = s.mailbox.role_folder(account, FolderRole::SentItems);
             match sent {
-                Some(sent) if !saves || s.mailbox.folder(sent).is_some_and(|f| f.remote_name.is_none()) => {
+                Some(sent)
+                    if !saves
+                        || s.mailbox.account(account).is_some_and(|a| a.kind == AccountKind::Graph)
+                        || s.mailbox.folder(sent).is_some_and(|f| f.remote_name.is_none()) =>
+                {
+                    // Graph sendMail is asynchronous: retain a local Sent copy until delta sync adopts it.
                     // The copy uploaded to the server's Sent folder must not carry the submission-only
                     // `X-MailCraft-Submit-*` fields.
                     let stripped = s
@@ -2222,6 +2291,16 @@ fn message_sent(s: &mut Session, account: AccountId, item: ItemId, result: Resul
                     s.mailbox.mail.remove(&item);
                 }
             }
+        }
+        Err(e)
+            if s.mailbox.account(account).is_some_and(|a| a.kind == AccountKind::Graph)
+                && e.contains("Delivery status unknown.") =>
+        {
+            if let Some(message) = s.mailbox.mail.get_mut(&item) {
+                message.is_draft = true;
+            }
+            s.sync.runs.entry(account).or_default().error = Some(e.clone());
+            s.notify(Notice::Error(format!("The message \"{subject}\" stays in the Outbox for manual review and will not be retried automatically. {e}")));
         }
         Err(e) => {
             s.sync.runs.entry(account).or_default().error = Some(e.clone());
@@ -2860,5 +2939,33 @@ mod tests {
         let safe = s.run("mail.junk", &json!({"action": "get"})).unwrap();
         let safe = safe.to_string();
         assert!(safe.contains("bo@example.org") && safe.contains("cy@example.org"), "{safe}");
+    }
+}
+
+#[cfg(test)]
+mod graph_delivery_tests {
+    use super::*;
+    #[test]
+    fn uncertain_graph_submission_is_held_for_review_instead_of_automatic_retry() {
+        let mut s = crate::sample::sample_session();
+        let id = s.mailbox.add_account(Account {
+            kind: AccountKind::Graph,
+            address: "owner@example.net".into(),
+            ..Default::default()
+        });
+        s.mailbox.create_default_folders(id);
+        let outbox = s.mailbox.role_folder(id, FolderRole::Outbox).unwrap();
+        let mut message = s.mailbox.mail.values().next().unwrap().clone();
+        message.id = ItemId(s.mailbox.alloc_id());
+        message.folder = outbox;
+        message.is_draft = false;
+        message.remote_id = None;
+        message.sent = None;
+        let item = message.id;
+        s.mailbox.mail.insert(item, message);
+        message_sent(&mut s, id, item, Err("Delivery status unknown. Check Sent before resending.".into()));
+        assert!(s.mailbox.mail[&item].is_draft);
+        assert_eq!(s.mailbox.mail[&item].folder, outbox);
+        assert!(outgoing_items(&s, s.mailbox.account(id).unwrap(), &Plan::all(), s.now().unix).is_empty());
     }
 }

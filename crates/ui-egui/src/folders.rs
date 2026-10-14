@@ -163,9 +163,30 @@ fn full_pane(ui: &mut Ui, app: &mut App, rect: Rect, st: &mut PaneState) {
 /// Draws the Favorites section and account trees; returns true when a folder was selected.
 fn tree(ui: &mut Ui, app: &mut App, st: &mut PaneState) -> bool {
     let rows = queries::folder_rows(&app.s);
-    let highlight = highlighted_row(&rows, st);
+    let highlight = if app.s.view.unified_inbox { None } else { highlighted_row(&rows, st) };
     let mut skipping = false;
     let mut navigated = false;
+    if app.theme_chooser_enabled {
+        for (label, command, sent) in
+            [("All Inboxes", "nav.unifiedInbox", false), ("All Sent", "nav.unifiedSent", true)]
+        {
+            if ui
+                .add_sized(
+                    [ui.available_width(), 28.0],
+                    egui::Button::selectable(
+                        app.s.view.unified_inbox && app.s.view.unified_sent == sent,
+                        label,
+                    ),
+                )
+                .clicked()
+            {
+                app.run(command, json!({}));
+                st.picked = None;
+                navigated = true;
+            }
+        }
+        ui.add_space(8.0);
+    }
     for (i, row) in rows.iter().enumerate() {
         match row.kind {
             FolderRowKind::FavoritesHeader | FolderRowKind::AccountRoot => {
@@ -477,6 +498,21 @@ mod tests {
             },
             app,
         )
+    }
+
+    #[test]
+    fn classic_desktop_layout_exposes_both_aggregate_mailboxes() {
+        let mut app = App::new(sample_session());
+        app.run("options.set", json!({"key":"general.interface","value":"outlook"}));
+        app.enable_desktop_themes();
+        let mut h = harness(app, vec2(230.0, 900.0));
+        h.run_steps(2);
+        h.get_by_label("All Sent").click();
+        h.run_steps(2);
+        assert!(h.state().s.view.unified_inbox && h.state().s.view.unified_sent);
+        h.get_by_label("All Inboxes").click();
+        h.run_steps(2);
+        assert!(h.state().s.view.unified_inbox && !h.state().s.view.unified_sent);
     }
 
     #[test]

@@ -367,7 +367,7 @@ pub fn scope_folders(s: &Session) -> Vec<FolderId> {
         return mb
             .folders
             .values()
-            .filter(|f| f.role == Some(mailcraft_model::FolderRole::Inbox))
+            .filter(|f| f.role == Some(crate::queries::aggregate_role(s)))
             .map(|f| f.id)
             .collect();
     }

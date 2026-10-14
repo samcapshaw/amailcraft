@@ -163,7 +163,11 @@ fn content(
     view: &ModuleView,
     rows: &[ViewRow],
 ) {
-    let rect = ui.max_rect();
+    let mut rect = ui.max_rect();
+    if let Some(folder) = folder {
+        rect = super::common::connected_strip(ui, app, folder, rect);
+    }
+    let read_only = folder.and_then(|f| app.s.mailbox.folder(f)).is_some_and(|f| f.graph_source.is_some());
     let ids: Vec<ItemId> = rows.iter().map(|r| r.id).collect();
     // Toolbar: search, new, view switch.
     let bar = Rect::from_min_size(rect.min, vec2(rect.width(), 44.0));
@@ -174,11 +178,11 @@ fn content(
                     .hint_text("Search contacts")
                     .desired_width(220.0_f32.min(ui.available_width() * 0.4)),
             );
-            if crate::widgets::icon_button(ui, app, "person", "New Contact", true).clicked() {
+            if crate::widgets::icon_button(ui, app, "person", "New Contact", !read_only).clicked() {
                 let f = current_folder(app, Kind::Contact);
                 editors::new_contact(app, st, f, false);
             }
-            let group = crate::widgets::icon_only(ui, app, "contact-group", "New Contact Group", true);
+            let group = crate::widgets::icon_only(ui, app, "contact-group", "New Contact Group", !read_only);
             a11y(&group, WidgetType::Button, "New Contact Group");
             if group.clicked() {
                 let f = current_folder(app, Kind::Contact);
@@ -571,6 +575,7 @@ fn section(ui: &mut Ui, app: &App, title: &str) {
 
 fn contact_card(ui: &mut Ui, app: &mut App, st: &mut ModState, id: ItemId) {
     let Some(c) = app.s.mailbox.contacts.get(&id).cloned() else { return };
+    let read_only = app.s.mailbox.folder(c.folder).is_some_and(|f| f.graph_source.is_some());
     ScrollArea::vertical().id_salt("mc-people-card-scroll").auto_shrink([false, false]).show(ui, |ui| {
         let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), 88.0), Sense::hover());
         avatar(ui, pos2(head.min.x + 40.0, head.center().y), 38.0, &c);
@@ -600,13 +605,29 @@ fn contact_card(ui: &mut Ui, app: &mut App, st: &mut ModState, id: ItemId) {
             head.width() - 100.0,
         );
         ui.horizontal(|ui| {
-            if crate::widgets::icon_button(ui, app, "settings", "Edit", true).clicked() {
-                editors::open_contact(app, st, id);
+            if crate::widgets::icon_button(
+                ui,
+                app,
+                "settings",
+                if read_only && !mailcraft_engine::cmd::connected::capabilities(&app.s, id).0 {
+                    "View"
+                } else {
+                    "Edit"
+                },
+                true,
+            )
+            .clicked()
+            {
+                if read_only && mailcraft_engine::cmd::connected::capabilities(&app.s, id).0 {
+                    app.run("graph.edit", json!({"id":id.0}));
+                } else {
+                    editors::open_contact(app, st, id);
+                }
             }
             if crate::widgets::icon_button(ui, app, "meeting", "Meeting", true).clicked() {
                 app.run("people.meeting", json!({ "ids": [id.0] }));
             }
-            if crate::widgets::icon_button(ui, app, "delete", "Delete", true).clicked() {
+            if crate::widgets::icon_button(ui, app, "delete", "Delete", !read_only).clicked() {
                 app.run("people.delete", json!({ "ids": [id.0] }));
             }
         });
@@ -681,7 +702,9 @@ fn contact_card(ui: &mut Ui, app: &mut App, st: &mut ModState, id: ItemId) {
         };
         section(ui, app, "Notes");
         if notes.trim().is_empty() {
-            if ui.link("Add notes").clicked() {
+            if read_only {
+                ui.label(RichText::new("No notes").color(app.theme.text_muted));
+            } else if ui.link("Add notes").clicked() {
                 editors::open_contact(app, st, id);
             }
         } else {

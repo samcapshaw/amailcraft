@@ -302,6 +302,8 @@ pub enum CalendarSource {
     Internet,
     /// Add Calendar › From File: a copy of an .ics file's events (editable).
     File,
+    /// Connected Microsoft 365 calendar snapshot.
+    Microsoft365,
 }
 
 /// An internet calendar subscription (Add Calendar › From Internet).

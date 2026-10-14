@@ -371,5 +371,50 @@ pub fn keytip(ctx: &egui::Context, app: &mut App, surface: Surface, seq: &str) -
     if longer_tab { KeytipHit::Partial } else { KeytipHit::NoMatch }
 }
 
+/// The full compose toolset as hierarchical menus, without expanding a ribbon into the writing area.
+pub(crate) fn compose_tools_menu(ui: &mut egui::Ui, app: &mut App, cid: u64) {
+    tools_menu(ui, app, Surface::Compose(cid), "compose");
+}
+
+pub(crate) fn module_tools_menu(ui: &mut egui::Ui, app: &mut App) {
+    let source = match app.s.view.module {
+        Module::Calendar => "calendar",
+        Module::People => "people",
+        Module::Tasks => "tasks",
+        Module::Notes => "notes",
+        _ => "main",
+    };
+    tools_menu(ui, app, Surface::Main, source);
+}
+
+fn tools_menu(ui: &mut egui::Ui, app: &mut App, surface: Surface, source: &str) {
+    for name in defs().tab_names(source, false) {
+        let Some(tab) = defs().tab(source, false, name) else {
+            continue;
+        };
+        ui.menu_button(name, |ui| {
+            let mut cx = draw::Cx {
+                ctx: ui.ctx().clone(),
+                surface,
+                simplified: false,
+                width: ui.available_width(),
+                tab,
+                keytip: None,
+                mem: state::load_mem(ui.ctx(), surface),
+                id: egui::Id::new(("mac-tools-menu", surface_key(surface), source, name)),
+                badges: Vec::new(),
+            };
+            for group in &tab.groups {
+                ui.menu_button(&group.name, |ui| {
+                    for ctl in &group.ctls {
+                        draw::ctl_in_menu(ui, app, &mut cx, ctl);
+                    }
+                });
+            }
+            state::store_mem(ui.ctx(), surface, cx.mem);
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests;

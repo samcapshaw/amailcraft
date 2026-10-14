@@ -26,12 +26,18 @@ All Inboxes brings personal, shared, and delegated Inbox folders into one view. 
 
 ## A look inside
 
+**Latest update:** [Interface themes, refined desktop layouts, and connected Microsoft 365](docs/update-2026-10-14.md).
+
 | Light and dark | Settings and accounts |
 |---|---|
 | <img src="docs/images/mac-dark.png" alt="The Mac unified inbox in dark mode" width="100%"> | <img src="docs/images/mac-settings.png" alt="Settings with an icon sidebar, grouped cards, aligned fields, and toggle switches" width="100%"> |
-| Muted accents, compact date markers, and a quiet toolbar. | Layered settings cards, refined controls, and consistent spacing. |
+| Charcoal surfaces, refined message rows, and a desktop layout with a collapsible sidebar and reader on the right. | Layered settings cards, refined controls, and consistent spacing. |
 | <img src="docs/images/mac-compose.png" alt="Compose window with a visible From identity and compact Send and Attach toolbar" width="100%"> | <img src="docs/images/mac-accounts.png" alt="Account settings with a mailbox list and separate account details" width="100%"> |
-| Sender identity stays visible; rich formatting is available when needed. | Personal and linked mailboxes in a dedicated account manager. |
+| Visible sender and signature picker, with a slim formatting bar when needed. | Personal and linked mailboxes in a dedicated account manager. |
+
+<img src="docs/images/mac-calendar.png" alt="MailCraft Mac calendar with a month grid, calendar sidebar, event creation tools, and persistent Mail, Calendar, Contacts, Tasks, and Notes navigation" width="100%">
+
+Calendar, Contacts, Tasks, and Notes stay one click away in the compact navigation bar. Calendar includes day, week, month, and schedule views, event and meeting editors, reminders, and the existing iCalendar tools. Graph accounts can also display opt-in read-only Microsoft 365 calendars and default contacts, including linked mailboxes when server permissions allow. Selected event/contact edits and attendee responses are available through an optional Graph editing grant.
 
 ## What is different in this fork
 
@@ -48,20 +54,45 @@ The underlying mail engine, CLI, and MCP integration come from upstream. This fo
 
 | Area | Available now |
 |---|---|
-| Inbox | Combined Inbox folders, per-account folders, unread counts, Focused/Other, date grouping, sorting, filtering, and search |
+| Inbox | Combined Inbox and Sent folders, per-account folders, unread counts, Focused/Other, date grouping, sorting, filtering, and search |
 | Mail | Reading pane, replies, forwarding, drafts, archive, delete, move/copy, flags, categories, and conversations |
-| Compose | Visible From identity, compact actions, rich text, spelling, signatures, address completion, and attachments |
-| Accounts | Existing IMAP/SMTP, POP3, JMAP, OAuth flows, local storage, and background sync; shared/delegated OAuth IMAP setup |
+| Compose | Visible From identity and signature picker, compact formatting, spelling, address completion, and attachments |
+| Accounts | Existing IMAP/SMTP, POP3, JMAP, OAuth flows, local storage, and background sync; shared/delegated OAuth IMAP setup and an initial Microsoft 365 Graph mail transport |
 | Settings | Category navigation, grouped forms, appearance selection, Save/Cancel, and a separate account manager |
-| Other tools | Existing rules, quick steps, calendar, people, tasks, notes, import/export, print/PDF, CLI, and MCP |
+| Calendar and organizer | Persistent Calendar, Contacts, Tasks, and Notes navigation; local editing plus opt-in Microsoft 365 calendars/default contacts, selected server-confirmed edits and attendee responses |
+| Other tools | Existing rules, quick steps, import/export, print/PDF, CLI, and MCP |
 
 See [Mac setup and limitations](docs/mac.md), [account documentation](docs/accounts.md), and the [fork roadmap](ROADMAP.md). The inherited [feature catalog](docs/parity.md) measures command coverage, not complete Outlook compatibility.
 
+## Choose your interface
+
+Open **Settings → General → Make it yours** and choose a saved profile:
+
+- **Apple** — our compact toolbar, quiet light/dark surfaces, collapsible mailboxes and right-hand reader.
+- **Outlook layout** — the inherited ribbon, folder pane and classic navigation, using MailCraft's original artwork.
+- **Omarchy** — the compact layout with Tokyo Night navy surfaces, blue selection, lavender details and softer text; a light variant is included.
+
+| Omarchy · Tokyo Night | Outlook layout |
+|---|---|
+| ![Omarchy theme with navy surfaces and blue selections](docs/images/theme-omarchy.png) | ![Classic ribbon and folder layout](docs/images/theme-outlook.png) |
+
+Light, Dark and Auto are independent of the layout. **Customize this palette** adds color pickers and RGB hex fields for accent, background, surfaces and text, with a preview. Save Changes applies the profile without a restart; Cancel discards edits. Custom colors use a fixed palette until switched off. Settings stay accessible in every layout.
+
+The same chooser runs on Linux. On your Omarchy machine, build using the existing Linux instructions, then launch once with:
+
+```sh
+cargo run -p mailcraft -- --interface omarchy
+```
+
+This saves the layout in the profile. Later launches follow the saved choice; select Dark in Settings for the Tokyo Night dark palette. Add `--sample` to preview without opening a persistent profile. The Omarchy profile is app-specific and does not modify your desktop theme. Linux runtime validation is still needed on your machine.
+
 ## Shared and delegated mailboxes
 
-Linked Microsoft 365 mailboxes currently use **OAuth IMAP/SMTP**. Each mailbox signs in separately as the delegate using a configured public-client app registration. Receive-only is the default; Send As is opt-in and requires server-side permission. A receive-only mailbox cannot silently send through your personal account.
+Microsoft 365 mail can now use **Graph over HTTPS**, with separate work/school OAuth sign-in, incremental message sync, MIME sending, and shared/delegated mailbox targets. The existing OAuth IMAP/SMTP path remains available. Receive-only is the default for linked mailboxes; sending requires explicit opt-in and the appropriate server grants.
 
-This has been tested with synthetic/local fixtures, **not a real Microsoft 365 tenant**. Graph/EWS, automatic mailbox discovery, permission administration, Send on Behalf, and shared Exchange calendars are not implemented. Organizations that disable IMAP/SMTP need a different transport. This is not yet a replacement for all Outlook account capabilities.
+Connected calendars and default contacts can be enabled separately in Graph account settings, with an additional sign-in grant. Offline snapshots cover the past 90 days and coming year for calendars. A separate editing grant enables focused server-confirmed edits and meeting responses, with persistent proposal review.
+
+This has been tested with synthetic/local fixtures, **not a real Microsoft 365 tenant**. Calendar/contact creation/deletion, broader organizer editing, custom contact folders, permission discovery, configurable Send As/on-behalf modes, server folder CRUD/copy uploads and EWS remain unimplemented. Microsoft determines the actual delegated sending identity from Exchange permissions. See the [Graph setup and limits](docs/microsoft365.md).
 
 Follow the [linked-mailbox setup guide](docs/mac.md#shared-and-delegated-microsoft-365-mailboxes) for the exact flow and limits.
 
@@ -89,7 +120,7 @@ The default Mac profile is `~/Library/Application Support/MailCraft Mac`; `--pro
 
 ## Development
 
-User-visible actions dispatch through the engine's command registry. The Mac shell lives in `crates/ui-egui/src/mac.rs`; the desktop host enables it with `App::enable_mac_style()`.
+User-visible actions dispatch through the engine's command registry. The Mac shell lives in `crates/ui-egui/src/mac.rs`; the desktop host enables saved layout profiles with `App::enable_desktop_themes()`.
 
 ```sh
 mkdir -p target/tmp

@@ -60,6 +60,8 @@ pub struct ViewState {
     pub focused_tab: bool,
     /// Aggregate only Inbox folders across accounts; selection.folder remains the view-settings anchor.
     pub unified_inbox: bool,
+    /// When the aggregate view is active, show Sent Items instead of Inbox folders.
+    pub unified_sent: bool,
     /// Active search query (empty = none) and its scope.
     pub search: String,
     pub search_scope: SearchScope,
@@ -111,6 +113,7 @@ impl Default for ViewState {
             dark: false,
             focused_tab: true,
             unified_inbox: false,
+            unified_sent: false,
             search: String::new(),
             search_scope: SearchScope::CurrentFolder,
             collapsed_groups: BTreeMap::new(),
@@ -267,6 +270,7 @@ impl Session {
             }
         }
         s.load_settings(dir);
+        crate::accounts::load_prefs(&mut s);
         // A named calendar time zone (Calendar › Time Zones) sets the display offset for today's DST rules.
         crate::cmd::calendar::views::refresh_time_zone(&mut s);
         Ok(s)
@@ -635,6 +639,13 @@ impl Session {
                 log::error!("command `{id}` panicked: {msg}");
                 Err(CmdError::Failed(format!("command `{id}` panicked: {msg}")))
             }
+        };
+        let result = if result.is_ok()
+            && snapshot.as_ref().is_some_and(|before| crate::sync::graph_pim::changed(before, &self.mailbox))
+        {
+            Err(CmdError::Disabled("Connected Microsoft 365 calendars and contacts are read-only. Make changes in Outlook and refresh here.".into()))
+        } else {
+            result
         };
         if let (Some(ids), Ok(_)) = (read_on_delete, &result) {
             // Options › Mail › "Mark messages as read when deleted" (part of the delete's undo step).

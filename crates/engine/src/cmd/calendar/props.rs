@@ -75,7 +75,14 @@ pub fn encode(p: &CalendarProps) -> Option<String> {
 /// Properties of `folder` (defaults for a missing or non-calendar folder).
 pub fn read(mb: &Mailbox, folder: FolderId) -> CalendarProps {
     match mb.folder(folder) {
-        Some(f) if f.kind == FolderKind::Calendar => decode(f.remote_name.as_deref()),
+        Some(f) if f.kind == FolderKind::Calendar => {
+            let mut props = decode(f.remote_name.as_deref());
+            if f.graph_source.is_some() {
+                props.source = CalendarSource::Microsoft365;
+                props.read_only = true;
+            }
+            props
+        }
         _ => CalendarProps::default(),
     }
 }
@@ -162,7 +169,7 @@ pub fn update(mb: &mut Mailbox, folder: FolderId, change: impl FnOnce(&mut Calen
 
 /// True when items in `folder` may not be changed (internet subscriptions).
 pub fn is_read_only(mb: &Mailbox, folder: FolderId) -> bool {
-    read(mb, folder).read_only
+    mb.folder(folder).is_some_and(|f| f.graph_source.is_some()) || read(mb, folder).read_only
 }
 
 /// An internet calendar address as an http(s) URL: `webcal://` → `http://`, `webcals://` → `https://`.

@@ -2,7 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AccountId, FolderId};
+use crate::{AccountId, DateTime, FolderId, ItemId};
+use std::collections::BTreeMap;
 
 /// Well-known folder roles in the observed fixed display order (not alphabetical).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -104,6 +105,29 @@ pub enum FolderKind {
     Search,
 }
 
+/// Server version and supported operations for one connected item. No authorization tokens.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GraphItemMeta {
+    pub etag: String,
+    pub can_edit: bool,
+    pub can_respond: bool,
+    pub event_type: String,
+}
+
+/// Last complete Microsoft 365 calendar/contact snapshot. Cached items change only after server
+/// confirmation. Keeping identity maps with folders journals them atomically with items.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GraphFolderSource {
+    pub remote_id: String,
+    pub items: BTreeMap<String, ItemId>,
+    pub metadata: BTreeMap<String, GraphItemMeta>,
+    pub last_sync: Option<DateTime>,
+    pub window_start: Option<DateTime>,
+    pub window_end: Option<DateTime>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Folder {
     pub id: FolderId,
@@ -122,6 +146,8 @@ pub struct Folder {
     pub search_query: Option<String>,
     /// Remote name/path on the server (IMAP mailbox name), if synced.
     pub remote_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_source: Option<GraphFolderSource>,
 }
 
 impl Folder {

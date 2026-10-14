@@ -1502,6 +1502,8 @@ pub(crate) fn body_editor_in(
     let theme_dark = host.theme().dark;
     let theme_text = host.theme().text;
     let dark = theme_dark && !c.light_canvas;
+    let palette = ((host.theme().mac_style || host.theme().custom_surfaces) && !c.light_canvas)
+        .then_some((host.theme().reading, theme_text));
     let zoom = f32::from(c.zoom_pct().clamp(10, 500)) / 100.0;
     let avail = ui.available_width();
     let width = if avail.is_finite() { avail.max(MIN_TEXT_W + 2.0 * PAD) } else { 800.0 };
@@ -1521,7 +1523,7 @@ pub(crate) fn body_editor_in(
     let focused_before = ctx.memory(|m| m.has_focus(id));
 
     // Background and body (the body painter draws the selection handed to it).
-    let bg = crate::body::map_color(c.body.background.unwrap_or(mailcraft_geom::Color::WHITE), dark);
+    let bg = crate::body::body_background(c.body.background, dark, palette);
     ui.painter().rect_filled(rect, 0.0, bg);
     let sel = c.selection.clone();
     mem.view.doc_key = mem.doc_key;
@@ -1541,6 +1543,7 @@ pub(crate) fn body_editor_in(
             ui.new_child(UiBuilder::new().max_rect(text_rect).id_salt(("mailcraft-compose-doc", cid)));
         let opts = BodyOptions {
             dark,
+            palette,
             zoom,
             allow_remote: false,
             paint_background: false,

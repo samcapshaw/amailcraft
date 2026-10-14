@@ -794,7 +794,7 @@ fn request_line(ed: &TaskEditor) -> Option<&'static str> {
 }
 
 /// Standard buttons row (right-aligned: primary, Delete, Cancel). `primary` is the main button's label.
-fn buttons(ui: &mut Ui, primary: &str, can_delete: bool, act: &mut Act) {
+fn buttons(ui: &mut Ui, app: &App, primary: &str, can_delete: bool, act: &mut Act) {
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if ui.button("Cancel").clicked() {
             *act = Act::Close;
@@ -802,7 +802,17 @@ fn buttons(ui: &mut Ui, primary: &str, can_delete: bool, act: &mut Act) {
         if can_delete && ui.button("Delete").clicked() {
             *act = Act::Delete;
         }
-        if ui.button(RichText::new(primary).strong()).clicked() {
+        let save = if app.mac_style {
+            ui.add(
+                egui::Button::new(RichText::new(primary).color(egui::Color32::WHITE))
+                    .fill(app.theme.accent)
+                    .min_size(egui::vec2(100.0, 28.0)),
+            )
+            .clicked()
+        } else {
+            ui.button(RichText::new(primary).strong()).clicked()
+        };
+        if save {
             *act = if primary == "Save & Close" { Act::Save } else { Act::SaveSend };
         }
     });
@@ -894,6 +904,8 @@ fn occurrence_prompt(ctx: &egui::Context, app: &mut App, st: &mut ModState) {
 
 fn appointment_window(ctx: &egui::Context, app: &mut App, st: &mut ModState) {
     let Some(mut ed) = st.editors.appt.take() else { return };
+    let read_only =
+        ed.folder.and_then(|f| app.s.mailbox.folder(FolderId(f))).is_some_and(|f| f.graph_source.is_some());
     let mut open = true;
     let meeting = ed.is_meeting();
     let kind = match (meeting, ed.occurrence.is_some()) {
@@ -918,15 +930,19 @@ fn appointment_window(ctx: &egui::Context, app: &mut App, st: &mut ModState) {
             }
         });
         ui.separator();
-        match ed.page {
+        if read_only {
+            ui.label(RichText::new("Microsoft 365 · Read-only").small().color(app.theme.text_muted));
+        }
+        ui.add_enabled_ui(!read_only, |ui| match ed.page {
             PAGE_SCHEDULING => super::scheduling::show(ui, app, &mut ed),
             PAGE_TRACKING => tracking_page(ui, app, &ed),
             _ => appointment_page(ui, app, &mut ed),
-        }
+        });
         error_line(ui, app, &ed.error);
         ui.separator();
         ui.horizontal(|ui| {
-            if meeting
+            if !read_only
+                && meeting
                 && ed.id.is_some()
                 && ed.organizer_me
                 && ed.occurrence.is_none()
@@ -939,7 +955,28 @@ fn appointment_window(ctx: &egui::Context, app: &mut App, st: &mut ModState) {
                 (true, true) => "Send Update",
                 _ => "Save & Close",
             };
-            buttons(ui, primary, ed.id.is_some(), &mut act);
+            if read_only {
+                if let Some(id) = ed.id {
+                    let (edit, respond) = mailcraft_engine::cmd::connected::capabilities(&app.s, ItemId(id));
+                    if (edit || respond)
+                        && ui
+                            .button(if respond {
+                                "Respond on Microsoft 365"
+                            } else {
+                                "Edit on Microsoft 365"
+                            })
+                            .clicked()
+                    {
+                        app.run("graph.edit", json!({"id":id}));
+                        act = Act::Close;
+                    }
+                }
+                if ui.button("Close").clicked() {
+                    act = Act::Close;
+                }
+            } else {
+                buttons(ui, app, primary, ed.id.is_some(), &mut act);
+            }
         });
     });
     // The recurrence dialog (over the editor).
@@ -1338,6 +1375,8 @@ pub(crate) fn business_card(ui: &mut Ui, app: &App, c: &Contact, width: f32) {
 
 fn contact_window(ctx: &egui::Context, app: &mut App, st: &mut ModState) {
     let Some(mut ed) = st.editors.contact.take() else { return };
+    let read_only =
+        ed.folder.and_then(|f| app.s.mailbox.folder(FolderId(f))).is_some_and(|f| f.graph_source.is_some());
     let mut open = true;
     let kind = if ed.group { "Contact Group" } else { "Contact" };
     let title =
@@ -1349,15 +1388,20 @@ fn contact_window(ctx: &egui::Context, app: &mut App, st: &mut ModState) {
         .open(&mut open)
         .show(ctx, |ui| {
             crate::dialogs::form_visuals(ui, &app.theme);
-            if ed.group {
-                group_page(ui, app, &mut ed);
-            } else {
-                match ed.page {
-                    ContactPage::General => contact_page(ui, app, &mut ed),
-                    ContactPage::Details => details_page(ui, app, &mut ed),
-                    ContactPage::AllFields => all_fields_page(ui, app, &ed),
-                }
+            if read_only {
+                ui.label(RichText::new("Microsoft 365 · Read-only").small().color(app.theme.text_muted));
             }
+            ui.add_enabled_ui(!read_only, |ui| {
+                if ed.group {
+                    group_page(ui, app, &mut ed);
+                } else {
+                    match ed.page {
+                        ContactPage::General => contact_page(ui, app, &mut ed),
+                        ContactPage::Details => details_page(ui, app, &mut ed),
+                        ContactPage::AllFields => all_fields_page(ui, app, &ed),
+                    }
+                }
+            });
             error_line(ui, app, &ed.error);
             if let Some((_, name)) = &ed.duplicate {
                 ui.separator();
@@ -1399,7 +1443,13 @@ fn contact_window(ctx: &egui::Context, app: &mut App, st: &mut ModState) {
                         }
                     });
                 }
-                buttons(ui, "Save & Close", ed.id.is_some(), &mut act);
+                if read_only {
+                    if ui.button("Close").clicked() {
+                        act = Act::Close;
+                    }
+                } else {
+                    buttons(ui, app, "Save & Close", ed.id.is_some(), &mut act);
+                }
             });
         });
     if ed.group {
@@ -2244,7 +2294,7 @@ fn task_window(ctx: &egui::Context, app: &mut App, st: &mut ModState) {
             {
                 act = Act::StatusReport;
             }
-            buttons(ui, "Save & Close", ed.id.is_some(), &mut act);
+            buttons(ui, app, "Save & Close", ed.id.is_some(), &mut act);
         });
     });
     if act == Act::AssignTask {
@@ -2430,7 +2480,7 @@ fn note_window(ctx: &egui::Context, app: &mut App, st: &mut ModState) {
         ui.label(RichText::new(format!("Modified {}", ed.modified)).size(11.0).color(app.theme.text_muted));
         error_line(ui, app, &ed.error);
         ui.separator();
-        buttons(ui, "Save & Close", true, &mut act);
+        buttons(ui, app, "Save & Close", true, &mut act);
     });
     let color_key = super::notes_view::COLORS
         .iter()

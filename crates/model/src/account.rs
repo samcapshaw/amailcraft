@@ -9,6 +9,8 @@ pub enum AccountKind {
     Local,
     Imap,
     Jmap,
+    /// Microsoft Graph v1.0 (OAuth, HTTPS).
+    Graph,
     Exchange,
 }
 
@@ -83,7 +85,7 @@ impl Account {
         match self.kind {
             AccountKind::Local => false,
             AccountKind::Imap => self.outgoing.is_some(),
-            AccountKind::Jmap | AccountKind::Exchange => true,
+            AccountKind::Jmap | AccountKind::Graph | AccountKind::Exchange => true,
         }
     }
 }

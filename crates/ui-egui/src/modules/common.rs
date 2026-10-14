@@ -568,12 +568,20 @@ pub(crate) fn folder_rows(
         .values()
         .filter(|f| f.kind == kind)
         .map(|f| {
+            let local_graph = f.graph_source.is_none()
+                && matches!(f.kind, FolderKind::Calendar | FolderKind::Contacts)
+                && app
+                    .s
+                    .mailbox
+                    .account(f.account)
+                    .is_some_and(|a| a.kind == mailcraft_model::AccountKind::Graph);
+            let name = if local_graph { format!("{} (local)", f.name) } else { f.name.clone() };
             let label = if multi {
                 let acct =
                     app.s.mailbox.account(f.account).map(|a| a.display_name.clone()).unwrap_or_default();
-                format!("{} - {acct}", f.name)
+                format!("{name} - {acct}")
             } else {
-                f.name.clone()
+                name
             };
             (label, f.id)
         })
@@ -844,6 +852,64 @@ pub(crate) fn view_switch(
         }
     }
     picked
+}
+
+/// A quiet source strip shared by connected calendars and contacts.
+pub(super) fn connected_strip(ui: &mut Ui, app: &mut App, folder: FolderId, rect: Rect) -> Rect {
+    let Some((start, end, updated, account, kind)) = app.s.mailbox.folder(folder).and_then(|f| {
+        f.graph_source.as_ref().map(|s| (s.window_start, s.window_end, s.last_sync, f.account, f.kind))
+    }) else {
+        return rect;
+    };
+    let options = mailcraft_engine::accounts::account_options(&app.s, account);
+    let enabled = match kind {
+        FolderKind::Calendar => options.graph_calendars,
+        FolderKind::Contacts => options.graph_contacts,
+        _ => false,
+    };
+    let strip = Rect::from_min_size(rect.min, egui::vec2(rect.width(), 34.0));
+    child(ui, strip.shrink2(egui::vec2(10.0, 5.0)), "connected-source", |ui| {
+        ui.horizontal(|ui| {
+            let detail = match (start, end) {
+                (Some(start), Some(end)) => format!(
+                    "Microsoft 365 · Read-only · {} – {}",
+                    start.to_rfc3339().get(..10).unwrap_or_default(),
+                    end.to_rfc3339().get(..10).unwrap_or_default()
+                ),
+                _ => "Microsoft 365 · Read-only · Offline copy".to_owned(),
+            };
+            let detail =
+                if options.graph_editing { detail.replace("Read-only", "Connected") } else { detail };
+            let detail = if enabled { detail } else { format!("{detail} · Paused") };
+            let response = ui.label(egui::RichText::new(detail).small().color(app.theme.text_muted));
+            if let Some(at) = updated {
+                response.on_hover_text(format!("Last successful sync: {}", at.to_rfc3339()));
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let count = mailcraft_engine::cmd::connected::pending_count(&app.s, account);
+                if (options.graph_editing || count > 0)
+                    && ui
+                        .small_button(if count > 0 {
+                            format!("Pending changes ({count})")
+                        } else {
+                            "Pending changes".into()
+                        })
+                        .clicked()
+                {
+                    app.run("graph.pending", serde_json::json!({}));
+                }
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Refresh").small())
+                    .on_hover_text("Enable this service in account settings to refresh its offline copy.")
+                    .clicked()
+                {
+                    app.run("sendReceive.folder", serde_json::json!({"folder":folder.0}));
+                }
+            });
+        });
+    });
+    ui.painter().hline(rect.x_range(), strip.max.y, Stroke::new(1.0, app.theme.separator));
+    Rect::from_min_max(egui::pos2(rect.min.x, strip.max.y + 1.0), rect.max)
 }
 
 #[cfg(test)]

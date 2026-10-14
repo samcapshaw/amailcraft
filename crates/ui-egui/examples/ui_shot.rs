@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run -p mailcraft-ui-egui --example ui_shot -- <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME]
-//!     [--reading right|bottom|off] [--select] [--classic] [--mac] [--shared] [--compose] [--settings] [--accounts] [--scale F]
+//!     [--reading right|bottom|off] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response] [--graph-pending] [--scale F]
 //! ```
 //!
 //! Defaults: 1920x1040, light theme, Mail module, nothing selected, scale 1. `--module` takes mail, calendar,
@@ -27,10 +27,20 @@ struct Opts {
     dark: bool,
     classic: bool,
     mac: bool,
+    interface: Option<String>,
+    custom_colors: bool,
     shared: bool,
+    sidebar_hidden: bool,
     compose: bool,
+    compose_preview: bool,
     settings: bool,
+    dialog: Option<String>,
     accounts: bool,
+    graph_setup: bool,
+    connected_preview: bool,
+    graph_edit: Option<String>,
+    graph_pending: bool,
+    unified_sent: bool,
     module: Option<String>,
     reading: Option<String>,
     select: bool,
@@ -46,10 +56,20 @@ fn parse() -> Result<Opts, String> {
         dark: false,
         classic: false,
         mac: false,
+        interface: None,
+        custom_colors: false,
         shared: false,
+        sidebar_hidden: false,
         compose: false,
+        compose_preview: false,
         settings: false,
+        dialog: None,
         accounts: false,
+        graph_setup: false,
+        connected_preview: false,
+        graph_edit: None,
+        graph_pending: false,
+        unified_sent: false,
         module: None,
         reading: None,
         select: false,
@@ -57,12 +77,40 @@ fn parse() -> Result<Opts, String> {
     };
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--sidebar-hidden" => {
+                o.sidebar_hidden = true;
+                o.mac = true;
+            }
             "--shared" => {
                 o.shared = true;
                 o.mac = true;
             }
+            "--compose-preview" => {
+                o.compose_preview = true;
+                o.compose = true;
+                o.mac = true;
+            }
             "--compose" => {
                 o.compose = true;
+                o.mac = true;
+            }
+            "--unified-sent" => {
+                o.unified_sent = true;
+                o.mac = true;
+            }
+            "--graph-edit" => {
+                o.connected_preview = true;
+                o.graph_edit = Some(args.next().ok_or("--graph-edit needs event, contact or response")?);
+            }
+            "--graph-pending" => {
+                o.connected_preview = true;
+                o.graph_pending = true;
+            }
+            "--connected-preview" => {
+                o.connected_preview = true;
+            }
+            "--graph-setup" => {
+                o.graph_setup = true;
                 o.mac = true;
             }
             "--accounts" => {
@@ -71,6 +119,19 @@ fn parse() -> Result<Opts, String> {
             }
             "--settings" => {
                 o.settings = true;
+                o.mac = true;
+            }
+            "--dialog" => {
+                o.dialog = Some(args.next().ok_or("--dialog needs a command id")?);
+                o.mac = true;
+            }
+            "--custom-colors" => {
+                o.custom_colors = true;
+                o.mac = true;
+                o.settings = true;
+            }
+            "--interface" => {
+                o.interface = Some(args.next().ok_or("--interface needs outlook, apple or omarchy")?);
                 o.mac = true;
             }
             "--mac" => o.mac = true,
@@ -101,7 +162,7 @@ fn parse() -> Result<Opts, String> {
         }
     }
     if o.out.is_empty() {
-        return Err("usage: ui_shot <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME] [--reading POS] [--select] [--classic] [--mac] [--shared] [--compose] [--settings] [--accounts] [--scale F]".into());
+        return Err("usage: ui_shot <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME] [--reading POS] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response] [--graph-pending] [--scale F]".into());
     }
     Ok(o)
 }
@@ -112,8 +173,17 @@ fn shoot(o: &Opts) -> Result<(), String> {
         session.mailbox = mailcraft_engine::sample::mac_sample_mailbox(session.now());
     }
     let mut app = App::new(session);
+    if let Some(interface) = &o.interface {
+        app.run("options.set", json!({"key":"general.interface", "value":interface}));
+    }
     if o.mac {
         app.enable_mac_style();
+    }
+    if o.custom_colors {
+        app.run("options.set", json!({"key":"general.customColors", "value":true}));
+    }
+    if o.sidebar_hidden {
+        app.run("view.folderPane", json!({"mode":"off"}));
     }
     if o.dark {
         app.run("options.set", json!({ "key": "view.darkMode", "value": true }));
@@ -135,14 +205,36 @@ fn shoot(o: &Opts) -> Result<(), String> {
     {
         app.run("nav.selectFolder", json!({"folder": inbox.0}));
     }
+    if o.unified_sent {
+        app.run("nav.unifiedSent", json!({}));
+    }
+    if o.graph_setup
+        && let Ok(account) = app.s.run("accounts.add", &json!({"kind":"graph", "graphCalendars":true, "graphContacts":true, "address":"graph@example.net", "default":false, "incoming":{"host":"https://graph.microsoft.com/v1.0"}})) {
+            app.s.notify(mailcraft_engine::Notice::OpenDialog("addAccount".into(), json!({"change":account.get("account")})));
+        }
     if o.accounts {
         app.run("file.accountSettings", json!({}));
+    }
+    if let Some(command) = &o.dialog {
+        app.run(command, json!({}));
     }
     if o.settings {
         app.run("options.open", json!({"page": "general"}));
     }
     if o.compose {
         app.run("mail.newEmail", json!({}));
+        if o.compose_preview
+            && let Some(cid) = app.s.composes.keys().next().copied()
+        {
+            app.run(
+                "compose.signatureCreate",
+                json!({"name":"Work","text":"Jordan Lee\nDesign team · Studio North"}),
+            );
+            app.run("compose.setTo", json!({"compose":cid,"value":"Alex Morgan <alex@example.net>"}));
+            app.run("compose.setSubject", json!({"compose":cid,"value":"A few thoughts for Thursday"}));
+            app.run("compose.insertText",json!({"compose":cid,"text":"Hi Alex,\n\nI’ve attached a few thoughts ahead of our review. The direction feels good—let’s keep the details simple and give the work a little room to breathe.\n\nLooking forward to hearing what you think.\n\n"}));
+            app.run("compose.signature", json!({"compose":cid,"name":"Work"}));
+        }
     }
     if o.select {
         let first = queries::list_rows(&app.s).into_iter().find_map(|r| match r {
@@ -156,7 +248,88 @@ fn shoot(o: &Opts) -> Result<(), String> {
     if let Some(m) = &o.module {
         app.run(&format!("nav.{m}"), json!({}));
     }
+    if o.connected_preview {
+        let now = app.s.now();
+        let account = app.s.mailbox.default_account().map(|a| a.id);
+        // Synthetic offline fixture only: no server endpoint, token or automatic network activity.
+        if let Some(id) = account {
+            if let Some(a) = app.s.mailbox.accounts.iter_mut().find(|a| a.id == id) {
+                a.kind = mailcraft_model::AccountKind::Graph;
+            }
+            app.run("accounts.options",json!({"account":id.0,"graphCalendars":true,"graphContacts":true,"graphEditing":(o.graph_edit.is_some() || o.graph_pending),"intervalMinutes":0,"push":false}));
+        }
+
+        let items: Vec<_> = app
+            .s
+            .mailbox
+            .appointments
+            .values()
+            .map(|a| (a.folder, a.id, true))
+            .chain(app.s.mailbox.contacts.values().map(|c| (c.folder, c.id, false)))
+            .collect();
+        for folder in app.s.mailbox.folders.values_mut().filter(|f| {
+            matches!(f.kind, mailcraft_model::FolderKind::Calendar | mailcraft_model::FolderKind::Contacts)
+                && Some(f.account) == account
+        }) {
+            folder.graph_source = Some(mailcraft_model::folder::GraphFolderSource {
+                remote_id: "synthetic-preview".into(),
+                items: items
+                    .iter()
+                    .filter(|(f, _, _)| *f == folder.id)
+                    .map(|(_, id, _)| (format!("synthetic-{}", id.0), *id))
+                    .collect(),
+                metadata: items
+                    .iter()
+                    .filter(|(f, _, _)| *f == folder.id)
+                    .map(|(_, id, event)| {
+                        (
+                            format!("synthetic-{}", id.0),
+                            mailcraft_model::folder::GraphItemMeta {
+                                etag: "W/\"synthetic\"".into(),
+                                can_edit: !(o.graph_edit.as_deref() == Some("response") && *event),
+                                can_respond: o.graph_edit.as_deref() == Some("response") && *event,
+                                event_type: "occurrence".into(),
+                            },
+                        )
+                    })
+                    .collect(),
+                last_sync: Some(now),
+                window_start: (folder.kind == mailcraft_model::FolderKind::Calendar)
+                    .then(|| mailcraft_model::DateTime::from_unix(now.unix - 90 * 86400, 0)),
+                window_end: (folder.kind == mailcraft_model::FolderKind::Calendar)
+                    .then(|| mailcraft_model::DateTime::from_unix(now.unix + 366 * 86400, 0)),
+            });
+        }
+    }
+    if o.graph_edit.is_some() || o.graph_pending {
+        app.s.view.work_offline = true;
+        let event = o.graph_edit.as_deref().is_some_and(|kind| kind != "contact");
+        let id = if event {
+            app.s
+                .mailbox
+                .appointments
+                .values()
+                .find(|a| app.s.mailbox.folder(a.folder).is_some_and(|f| f.graph_source.is_some()))
+                .map(|a| a.id)
+        } else {
+            app.s
+                .mailbox
+                .contacts
+                .values()
+                .find(|c| app.s.mailbox.folder(c.folder).is_some_and(|f| f.graph_source.is_some()))
+                .map(|c| c.id)
+        };
+        if let Some(id) = id {
+            if o.graph_pending {
+                app.run("graph.edit", json!({"id":id.0,"fields":{"company":"Studio North"}}));
+                app.run("graph.pending", json!({}));
+            } else {
+                app.run("graph.edit", json!({"id":id.0}));
+            }
+        }
+    }
     let mut fonts_done = false;
+    let compose_preview = o.compose_preview;
     let mut harness = Harness::builder()
         .with_size(egui::vec2(o.w, o.h))
         .with_pixels_per_point(o.scale)
@@ -168,6 +341,9 @@ fn shoot(o: &Opts) -> Result<(), String> {
                     fonts_done = true;
                     ui.ctx().request_repaint();
                     return;
+                }
+                if compose_preview && let Some(cid) = app.s.composes.keys().next().copied() {
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("mac-compose-format", cid)), true));
                 }
                 app.ui_root(ui);
             },
