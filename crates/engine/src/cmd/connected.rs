@@ -3,6 +3,8 @@
 use crate::{CmdError, CmdResult, CommandSpec, Notice, Plan, Session, always};
 use mailcraft_model::folder::GraphItemMeta;
 use mailcraft_model::{AccountId, AccountKind, DateTime, FolderKind, ItemId};
+mod lifecycle;
+pub use lifecycle::{can_create, can_delete, write_allowed};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -15,6 +17,8 @@ pub struct PendingWrite {
     pub endpoint: String,
     pub item: ItemId,
     pub remote_id: String,
+    #[serde(default)]
+    pub folder: Option<mailcraft_model::FolderId>,
     pub kind: String,
     pub action: String,
     pub etag: String,
@@ -24,12 +28,14 @@ pub struct PendingWrite {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    [("graph.edit","Edit on Microsoft 365",r#"{"id": number, "fields"?: object} (no fields opens editor; existing event: subject/location/start/end; contact: firstName/lastName/company/jobTitle/email/mobile/notes)"#),
+    [("graph.createAppointment","New Microsoft 365 appointment",r#"{"folder":number,"fields"?:{"subject":string,"location"?:string,"start":string,"end":string,"notes"?:string}}"#),
+     ("graph.deleteAppointment","Delete Microsoft 365 appointment",r#"{"id":number,"confirm"?:true,"version"?:string}"#),
+     ("graph.edit","Edit on Microsoft 365",r#"{"id": number, "fields"?: object} (no fields opens editor; existing event: subject/location/start/end; contact: firstName/lastName/company/jobTitle/email/mobile/notes)"#),
      ("graph.respond","Respond to Microsoft 365 meeting",r#"{"id": number, "response": "accept"|"tentativelyAccept"|"decline", "comment"?: string}"#),
      ("graph.pending","Microsoft 365 pending changes",r#"{} (opens review dialog); {"list":true} returns pending writes"#),
      ("graph.retry","Retry Microsoft 365 change",r#"{"write":number,"reviewed"?:true} (review required for held operations; queued proposals keep their original version)"#),
      ("graph.discard","Discard Microsoft 365 change",r#"{"write":number} (queued/failed/uncertain only)"#)]
-    .into_iter().map(|(id,label,params)|CommandSpec {id,label,location:"Microsoft 365 › Connected items",shortcut:"",params,mutates:false,enabled:always,run:match id {"graph.edit"=>edit,"graph.respond"=>respond,"graph.pending"=>pending_cmd,"graph.retry"=>retry,_=>discard}}).collect()
+    .into_iter().map(|(id,label,params)|CommandSpec {id,label,location:"Microsoft 365 › Connected items",shortcut:"",params,mutates:false,enabled:always,run:match id {"graph.createAppointment"=>lifecycle::create,"graph.deleteAppointment"=>lifecycle::delete,"graph.edit"=>edit,"graph.respond"=>respond,"graph.pending"=>pending_cmd,"graph.retry"=>retry,_=>discard}}).collect()
 }
 fn item(s: &Session, id: ItemId) -> Result<(AccountId, String, FolderKind, GraphItemMeta), CmdError> {
     let folder = s
@@ -216,7 +222,7 @@ fn enqueue(s: &mut Session, p: &Value, action: &str) -> CmdResult {
     let id = ItemId(target(p, "id")?);
     let (account, remote_id, kind, meta) = item(s, id)?;
     let (can_edit, can_respond) = capabilities(s, id);
-    if if action == "patch" { !can_edit } else { !can_respond } {
+    if if action == "patch" || action == "delete" { !can_edit } else { !can_respond } {
         return Err(CmdError::Disabled("Enable Microsoft 365 editing, sign in with the editing provider and refresh this folder. The server must grant permission for this operation.".into()));
     }
     if s.sync.prefs.data.graph_writes.iter().any(|op| op.item == id) {
@@ -229,6 +235,8 @@ fn enqueue(s: &mut Session, p: &Value, action: &str) -> CmdResult {
     }
     let payload = if action == "patch" {
         patch(s, id, kind, p.get("fields").unwrap_or(&Value::Null))?
+    } else if action == "delete" {
+        json!({"subject":s.mailbox.appointments.get(&id).map(|a|a.subject.as_str()).unwrap_or_default()})
     } else {
         json!({"comment":text(p,"comment",4096)?.unwrap_or_default(),"sendResponse":true})
     };
@@ -261,6 +269,7 @@ fn enqueue(s: &mut Session, p: &Value, action: &str) -> CmdResult {
         endpoint,
         item: id,
         remote_id,
+        folder: None,
         kind: if kind == FolderKind::Calendar { "event" } else { "contact" }.into(),
         action: action.into(),
         etag: version,
@@ -335,6 +344,9 @@ fn retry(s: &mut Session, p: &Value) -> CmdResult {
     if op.status == "inFlight" || s.sync.busy(op.account) {
         return Err(CmdError::Disabled("Wait for this account's current operation to finish.".into()));
     }
+    if op.action == "create" {
+        return lifecycle::retry_create(s, &op);
+    }
     let (account, remote, _, meta) = item(s, op.item)?;
     if !s.mailbox.account(account).is_some_and(|a| {
         a.address == op.mailbox && a.incoming.as_ref().is_some_and(|i| i.host == op.endpoint)
@@ -344,8 +356,13 @@ fn retry(s: &mut Session, p: &Value) -> CmdResult {
         ));
     }
 
+    if op.action == "delete" && !can_delete(s, op.item) {
+        return Err(CmdError::Disabled(
+            "Only a non-recurring appointment without attendees can be deleted here. Refresh first.".into(),
+        ));
+    }
     let allowed = capabilities(s, op.item);
-    if !(if op.action == "patch" { allowed.0 } else { allowed.1 }) {
+    if !(if op.action == "patch" || op.action == "delete" { allowed.0 } else { allowed.1 }) {
         return Err(CmdError::Disabled(
             "Refresh this item and check its editing permissions before retrying.".into(),
         ));
@@ -500,6 +517,78 @@ mod tests {
             store.checkpoint(&s.mailbox).unwrap();
         }
         (account, id, folder)
+    }
+    #[test]
+    fn creation_is_durable_and_reviewed_retry_preserves_its_transaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::open(dir.path()).unwrap();
+        let (account, _, folder) = fixture(&mut s, true);
+        let start = DateTime::from_unix(s.now().unix + 3600, 0).to_rfc3339();
+        let end = DateTime::from_unix(s.now().unix + 7200, 0).to_rfc3339();
+        let before = s.mailbox.appointments.clone();
+        s.run(
+            "graph.createAppointment",
+            &json!({"folder":folder.0,"fields":{"subject":"Planning","start":start,"end":end}}),
+        )
+        .unwrap();
+        let op = pending(&s)[0].clone();
+        assert_eq!(s.mailbox.appointments, before);
+        assert!(write_allowed(&s, &op));
+        assert!(op.payload["transactionId"].as_str().is_some_and(|v| !v.is_empty()));
+        claim(&mut s, account, std::slice::from_ref(&op)).unwrap();
+        drop(s);
+        let mut s = Session::open(dir.path()).unwrap();
+        s.view.work_offline = true;
+        assert_eq!(pending(&s)[0].status, "uncertain");
+        assert!(s.run("graph.retry", &json!({"write":op.id})).is_err());
+        s.run("graph.retry", &json!({"write":op.id,"reviewed":true})).unwrap();
+        assert_eq!(pending(&s)[0].payload, op.payload);
+        assert_eq!(pending(&s)[0].remote_id, "calendar");
+        s.mailbox.accounts.iter_mut().find(|a| a.id == account).unwrap().address =
+            "changed@example.net".into();
+        assert!(!write_allowed(&s, &pending(&s)[0]));
+        assert!(s.run("graph.retry", &json!({"write":op.id})).is_err());
+    }
+    #[test]
+    fn creation_rejects_meetings_missing_offsets_and_invalid_times() {
+        let mut s = crate::sample::sample_session();
+        let (_, _, folder) = fixture(&mut s, true);
+        let start = DateTime::from_unix(s.now().unix + 3600, 0).to_rfc3339();
+        let end = DateTime::from_unix(s.now().unix + 7200, 0).to_rfc3339();
+        for fields in [
+            json!({"subject":"A","start":start,"end":end,"attendees":["a@example.net"]}),
+            json!({"subject":"A","start":start,"end":start}),
+            json!({"subject":"A","start":start.trim_end_matches('Z'),"end":end}),
+            json!({"subject":"","start":start,"end":end}),
+        ] {
+            assert!(s.run("graph.createAppointment", &json!({"folder":folder.0,"fields":fields})).is_err());
+        }
+        assert!(pending(&s).is_empty());
+    }
+    #[test]
+    fn deletion_requires_confirmation_and_refuses_meetings_or_series() {
+        let mut s = crate::sample::sample_session();
+        let (_, id, folder) = fixture(&mut s, true);
+        assert!(!can_delete(&s, id));
+        s.mailbox
+            .folders
+            .get_mut(&folder)
+            .unwrap()
+            .graph_source
+            .as_mut()
+            .unwrap()
+            .metadata
+            .get_mut("remote-item")
+            .unwrap()
+            .event_type = "singleInstance".into();
+        assert!(can_delete(&s, id));
+        s.run("graph.deleteAppointment", &json!({"id":id.0})).unwrap();
+        assert!(pending(&s).is_empty());
+        s.run("graph.deleteAppointment", &json!({"id":id.0,"confirm":true})).unwrap();
+        assert_eq!(pending(&s)[0].action, "delete");
+        assert!(s.mailbox.appointments.contains_key(&id));
+        s.mailbox.appointments.get_mut(&id).unwrap().is_meeting = true;
+        assert!(!write_allowed(&s, &pending(&s)[0]));
     }
     #[test]
     fn proposals_are_partial_durable_and_do_not_change_the_cache_or_allow_generic_writes() {

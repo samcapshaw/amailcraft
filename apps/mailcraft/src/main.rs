@@ -25,7 +25,7 @@ Usage: mailcraft [OPTIONS]
 Options:
   --profile <DIR>       Data folder to open (created when missing)
   --sample              Open an in-memory sample mailbox instead of a profile
-  --interface <NAME>    Select and save apple, outlook or omarchy layout
+  --interface <NAME>    Select and save apple, pc or omarchy layout
   --control-port <N>    Accept control commands on 127.0.0.1:<N> (for tests and automation)
   --version             Print the version and exit
   -h, --help            Print this help and exit
@@ -65,8 +65,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--sample" => out.sample = true,
             "--interface" => {
                 let name = value("--interface")?;
+                let name = if name == "pc" { "outlook".to_owned() } else { name };
                 if !mailcraft_engine::settings::INTERFACES.iter().any(|(id, _)| *id == name) {
-                    return Err("--interface needs apple, outlook or omarchy".into());
+                    return Err("--interface needs apple, pc or omarchy".into());
                 }
                 out.interface = Some(name);
             }
@@ -206,7 +207,11 @@ fn main() -> ExitCode {
 
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title(if cfg!(target_os = "macos") { "MailCraft Mac" } else { "MailCraft" })
-        .with_app_id(if cfg!(target_os = "macos") { "dev.mailcraft.mac" } else { "saint.dev.MailCraft" })
+        .with_app_id(if cfg!(target_os = "macos") {
+            "dev.mailcraft.mac"
+        } else {
+            "io.github.samcapshaw.amailcraft"
+        })
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size(mailcraft_ui_egui::theme::size::MIN_WINDOW)
         .with_decorations(true);

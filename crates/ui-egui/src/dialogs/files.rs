@@ -357,7 +357,11 @@ struct IeState {
 
 fn import_export(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
     let uid = d.uid;
-    let init = |a: &App| IeState { folder: Some(a.s.selection.folder.0), ..Default::default() };
+    let init = |a: &App| IeState {
+        folder: Some(a.s.selection.folder.0),
+        action: if d.bool("export") { IE_ACTIONS.iter().position(|a| a.export()).unwrap_or(0) } else { 0 },
+        ..Default::default()
+    };
     with_state(ctx, app, uid, init, |st, app| {
         window(ctx, app, d, "Import and Export Wizard", 520.0, |ui, app| {
             let Some(action) = IE_ACTIONS.get(st.action).copied() else { return Out::Close };

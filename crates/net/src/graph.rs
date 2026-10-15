@@ -196,9 +196,50 @@ impl GraphClient {
         etag: &str,
         payload: &Value,
     ) -> Result<()> {
+        if kind == "event" && action == "create" {
+            let bytes = serde_json::to_vec(payload).map_err(|e| NetError::Invalid(e.to_string()))?;
+            if id.is_empty()
+                || bytes.len() > 32 * 1024
+                || payload
+                    .get("transactionId")
+                    .and_then(Value::as_str)
+                    .is_none_or(|s| s.is_empty() || s.len() > 128)
+            {
+                return Err(NetError::Invalid("Creation needs a calendar and stable transaction ID".into()));
+            }
+            let calendar = self.json("GET", &format!("calendars/{}", percent_encode(id)), None)?;
+            if calendar.get("canEdit").and_then(Value::as_bool) != Some(true) {
+                return Err(NetError::Refused("This calendar does not permit creation.".into()));
+            }
+            return match self.request_version(
+                "POST",
+                &self.url(&format!("calendars/{}/events", percent_encode(id))),
+                "application/json",
+                Some(&bytes),
+                None,
+            ) {
+                Ok(body) => {
+                    let result: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                    if result.get("id").and_then(Value::as_str).is_some_and(|s| !s.is_empty()) {
+                        Ok(())
+                    } else {
+                        Err(NetError::Refused("Outcome uncertain. The server returned no event identity; check the calendar before retrying.".into()))
+                    }
+                }
+                Err(error)
+                    if error.is_connection_lost()
+                        || matches!(error, NetError::Http { status: 500..=599, .. }) =>
+                {
+                    Err(NetError::Refused(
+                        "Outcome uncertain. Check the calendar before retrying this appointment.".into(),
+                    ))
+                }
+                Err(error) => Err(error),
+            };
+        }
         if !["event", "contact"].contains(&kind)
             || !(action == "patch"
-                || kind == "event" && ["accept", "tentativelyAccept", "decline"].contains(&action))
+                || kind == "event" && ["accept", "tentativelyAccept", "decline", "delete"].contains(&action))
         {
             return Err(NetError::Invalid("Unsupported connected operation".into()));
         }
@@ -209,11 +250,20 @@ impl GraphClient {
             "{}/{}{}",
             if kind == "event" { "events" } else { "contacts" },
             percent_encode(id),
-            if action == "patch" { String::new() } else { format!("/{action}") }
+            if action == "patch" || action == "delete" { String::new() } else { format!("/{action}") }
         );
 
         if action != "patch" {
             let current = self.json("GET", &format!("events/{}", percent_encode(id)), None)?;
+            if action == "delete"
+                && (current.get("isOrganizer").and_then(Value::as_bool) != Some(true)
+                    || current.get("type").and_then(Value::as_str) != Some("singleInstance")
+                    || current.get("attendees").and_then(Value::as_array).is_none_or(|v| !v.is_empty()))
+            {
+                return Err(NetError::Refused(
+                    "Deletion is limited to single appointments without attendees; refresh first.".into(),
+                ));
+            }
             if current.get("@odata.etag").and_then(Value::as_str) != Some(etag) {
                 return Err(NetError::Http {
                     status: 412,
@@ -256,7 +306,7 @@ impl GraphClient {
         if bytes.len() > 32 * 1024 {
             return Err(NetError::TooLarge("Connected change".into()));
         }
-        match self.request_version(if action=="patch" {"PATCH"}else{"POST"},&self.url(&path),"application/json",Some(&bytes),Some(etag)) {
+        match self.request_version(if action=="patch" {"PATCH"}else if action=="delete" {"DELETE"}else{"POST"},&self.url(&path),"application/json",if action=="delete" {None}else{Some(&bytes)},Some(etag)) {
             Ok(_)=>Ok(()),
             Err(error) if error.is_connection_lost() || matches!(error,NetError::Http{status:500..=599,..})=>Err(NetError::Refused("Outcome uncertain. Microsoft may have accepted the change; check Outlook before retrying.".into())),
             Err(error)=>Err(error),
@@ -370,6 +420,130 @@ mod tests {
     use crate::http::testserver::{json as response, serve};
     use serde_json::json;
 
+    #[test]
+    fn appointment_create_is_calendar_scoped_and_carries_the_stable_transaction() {
+        let (base, thread, seen) = serve(2, |req| {
+            if req.method == "GET" {
+                assert!(req.path.ends_with("/calendars/team"));
+                response(200, r#"{"canEdit":true}"#)
+            } else {
+                assert_eq!(req.method, "POST");
+                assert!(req.path.ends_with("/calendars/team/events"));
+                assert_eq!(serde_json::from_slice::<Value>(&req.body).unwrap()["transactionId"], "stable-id");
+                response(201, r#"{"id":"new-event"}"#)
+            }
+        });
+        let client = GraphConn::new(
+            &format!("{base}/v1.0"),
+            "team@example.net",
+            "fixture",
+            ConnectOptions { allow_plaintext_auth: true, ..Default::default() },
+        )
+        .unwrap()
+        .connect()
+        .unwrap();
+        client
+            .write_connected(
+                "event",
+                "team",
+                "create",
+                "",
+                &json!({"transactionId":"stable-id","subject":"Planning"}),
+            )
+            .unwrap();
+        // A request without a stable identifier never reaches the server.
+        assert!(client.write_connected("event", "team", "create", "", &json!({})).is_err());
+        thread.join().unwrap();
+        assert_eq!(seen.try_iter().count(), 2);
+    }
+    #[test]
+    fn delete_preflights_shape_and_sends_a_conditional_empty_delete() {
+        let (base, thread, seen) = serve(2, |req| {
+            if req.method == "GET" {
+                response(
+                    200,
+                    r#"{"@odata.etag":"v1","type":"singleInstance","isOrganizer":true,"attendees":[]}"#,
+                )
+            } else {
+                assert_eq!(req.method, "DELETE");
+                assert!(req.body.is_empty());
+                assert_eq!(req.header("if-match"), Some("v1"));
+                response(204, "")
+            }
+        });
+        let client = GraphConn::new(
+            &format!("{base}/v1.0"),
+            "team@example.net",
+            "fixture",
+            ConnectOptions { allow_plaintext_auth: true, ..Default::default() },
+        )
+        .unwrap()
+        .connect()
+        .unwrap();
+        client.write_connected("event", "event", "delete", "v1", &json!({})).unwrap();
+        thread.join().unwrap();
+        assert_eq!(seen.try_iter().count(), 2);
+    }
+    #[test]
+    fn lifecycle_preflights_refuse_read_only_calendars_and_changed_or_meeting_events() {
+        for (action, body) in [
+            ("create", json!({"canEdit":false})),
+            ("delete", json!({"@odata.etag":"v2","type":"singleInstance","isOrganizer":true,"attendees":[]})),
+            (
+                "delete",
+                json!({"@odata.etag":"v1","type":"singleInstance","isOrganizer":true,"attendees":[{"emailAddress":{"address":"a@example.net"}}]}),
+            ),
+            ("delete", json!({"@odata.etag":"v1","type":"seriesMaster","isOrganizer":true,"attendees":[]})),
+        ] {
+            let (base, thread, seen) = serve(1, move |req| {
+                assert_eq!(req.method, "GET");
+                response(200, &body.to_string())
+            });
+            let client = GraphConn::new(
+                &format!("{base}/v1.0"),
+                "team@example.net",
+                "fixture",
+                ConnectOptions { allow_plaintext_auth: true, ..Default::default() },
+            )
+            .unwrap()
+            .connect()
+            .unwrap();
+            assert!(
+                client
+                    .write_connected("event", "target", action, "v1", &json!({"transactionId":"stable"}))
+                    .is_err()
+            );
+            thread.join().unwrap();
+            assert_eq!(seen.try_iter().count(), 1);
+        }
+    }
+    #[test]
+    fn creation_without_a_confirmed_identity_is_held_not_replayed() {
+        let (base, thread, seen) = serve(2, |req| {
+            response(
+                if req.method == "GET" { 200 } else { 201 },
+                if req.method == "GET" { r#"{"canEdit":true}"# } else { "{}" },
+            )
+        });
+        let client = GraphConn::new(
+            &format!("{base}/v1.0"),
+            "team@example.net",
+            "fixture",
+            ConnectOptions { allow_plaintext_auth: true, ..Default::default() },
+        )
+        .unwrap()
+        .connect()
+        .unwrap();
+        assert!(
+            client
+                .write_connected("event", "calendar", "create", "", &json!({"transactionId":"stable"}))
+                .unwrap_err()
+                .to_string()
+                .contains("Outcome uncertain")
+        );
+        thread.join().unwrap();
+        assert_eq!(seen.try_iter().count(), 2);
+    }
     #[test]
     fn changing_a_contact_address_preserves_its_server_display_name() {
         let (base, thread, _) = serve(2, |req| {

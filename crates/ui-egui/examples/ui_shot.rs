@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run -p mailcraft-ui-egui --example ui_shot -- <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME]
-//!     [--reading right|bottom|off] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response] [--graph-pending] [--scale F]
+//!     [--reading right|bottom|off] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response|create|delete] [--graph-pending] [--scale F]
 //! ```
 //!
 //! Defaults: 1920x1040, light theme, Mail module, nothing selected, scale 1. `--module` takes mail, calendar,
@@ -15,6 +15,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::ExitCode;
 
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use mailcraft_engine::queries::{self, ListRow};
 use mailcraft_engine::sample::sample_session;
 use mailcraft_ui_egui::App;
@@ -34,9 +35,12 @@ struct Opts {
     compose: bool,
     compose_preview: bool,
     settings: bool,
+    settings_page: Option<String>,
+    more_menu: bool,
     dialog: Option<String>,
     accounts: bool,
     graph_setup: bool,
+    account_setup: Option<String>,
     connected_preview: bool,
     graph_edit: Option<String>,
     graph_pending: bool,
@@ -63,9 +67,12 @@ fn parse() -> Result<Opts, String> {
         compose: false,
         compose_preview: false,
         settings: false,
+        settings_page: None,
+        more_menu: false,
         dialog: None,
         accounts: false,
         graph_setup: false,
+        account_setup: None,
         connected_preview: false,
         graph_edit: None,
         graph_pending: false,
@@ -96,6 +103,18 @@ fn parse() -> Result<Opts, String> {
             }
             "--unified-sent" => {
                 o.unified_sent = true;
+                o.mac = true;
+            }
+            "--settings-page" => {
+                o.settings_page = Some(args.next().ok_or("--settings-page needs accounts or appearance")?);
+                o.mac = true;
+            }
+            "--more-menu" => {
+                o.more_menu = true;
+                o.mac = true;
+            }
+            "--account-setup" => {
+                o.account_setup = Some(args.next().ok_or("--account-setup needs entry, shared or imap")?);
                 o.mac = true;
             }
             "--graph-edit" => {
@@ -162,7 +181,7 @@ fn parse() -> Result<Opts, String> {
         }
     }
     if o.out.is_empty() {
-        return Err("usage: ui_shot <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME] [--reading POS] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response] [--graph-pending] [--scale F]".into());
+        return Err("usage: ui_shot <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME] [--reading POS] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response|create|delete] [--graph-pending] [--scale F]".into());
     }
     Ok(o)
 }
@@ -208,6 +227,21 @@ fn shoot(o: &Opts) -> Result<(), String> {
     if o.unified_sent {
         app.run("nav.unifiedSent", json!({}));
     }
+    if let Some(mode) = &o.account_setup {
+        app.s.view.work_offline = true;
+        if mode == "imap" {
+            let account = app.s.run("accounts.add", &json!({"kind":"imap", "address":"person@example.net", "displayName":"Personal", "incoming":{"host":"imap.example.net", "port":993,"security":"tls"}, "outgoing":{"host":"smtp.example.net", "port":465,"security":"tls"}})).map_err(|e| e.to_string())?;
+            app.s.notify(mailcraft_engine::Notice::OpenDialog(
+                "addAccount".into(),
+                json!({"change":account.get("account")}),
+            ));
+        } else {
+            app.s.notify(mailcraft_engine::Notice::OpenDialog(
+                if mode == "shared" { "addSharedMailbox" } else { "addAccount" }.into(),
+                json!({}),
+            ));
+        }
+    }
     if o.graph_setup
         && let Ok(account) = app.s.run("accounts.add", &json!({"kind":"graph", "graphCalendars":true, "graphContacts":true, "address":"graph@example.net", "default":false, "incoming":{"host":"https://graph.microsoft.com/v1.0"}})) {
             app.s.notify(mailcraft_engine::Notice::OpenDialog("addAccount".into(), json!({"change":account.get("account")})));
@@ -220,6 +254,12 @@ fn shoot(o: &Opts) -> Result<(), String> {
     }
     if o.settings {
         app.run("options.open", json!({"page": "general"}));
+    }
+    if let Some(page) = &o.settings_page {
+        app.s.notify(mailcraft_engine::Notice::OpenDialog(
+            "options".into(),
+            json!({"page":"general","workspace":page}),
+        ));
     }
     if o.compose {
         app.run("mail.newEmail", json!({}));
@@ -288,7 +328,12 @@ fn shoot(o: &Opts) -> Result<(), String> {
                                 etag: "W/\"synthetic\"".into(),
                                 can_edit: !(o.graph_edit.as_deref() == Some("response") && *event),
                                 can_respond: o.graph_edit.as_deref() == Some("response") && *event,
-                                event_type: "occurrence".into(),
+                                event_type: if o.graph_edit.as_deref() == Some("delete") {
+                                    "singleInstance"
+                                } else {
+                                    "occurrence"
+                                }
+                                .into(),
                             },
                         )
                     })
@@ -323,13 +368,25 @@ fn shoot(o: &Opts) -> Result<(), String> {
             if o.graph_pending {
                 app.run("graph.edit", json!({"id":id.0,"fields":{"company":"Studio North"}}));
                 app.run("graph.pending", json!({}));
+            } else if o.graph_edit.as_deref() == Some("create") {
+                if let Some(a) = app.s.mailbox.appointments.get(&id) {
+                    app.run("graph.createAppointment", json!({"folder":a.folder.0}));
+                }
+            } else if o.graph_edit.as_deref() == Some("delete") {
+                if let Some(a) = app.s.mailbox.appointments.get_mut(&id) {
+                    a.is_meeting = false;
+                    a.attendees.clear();
+                    a.recurrence = None;
+                    a.recurrence_id = None;
+                    a.subject = "Design review".into();
+                }
+                app.run("graph.deleteAppointment", json!({"id":id.0}));
             } else {
                 app.run("graph.edit", json!({"id":id.0}));
             }
         }
     }
     let mut fonts_done = false;
-    let compose_preview = o.compose_preview;
     let mut harness = Harness::builder()
         .with_size(egui::vec2(o.w, o.h))
         .with_pixels_per_point(o.scale)
@@ -342,15 +399,16 @@ fn shoot(o: &Opts) -> Result<(), String> {
                     ui.ctx().request_repaint();
                     return;
                 }
-                if compose_preview && let Some(cid) = app.s.composes.keys().next().copied() {
-                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("mac-compose-format", cid)), true));
-                }
                 app.ui_root(ui);
             },
             app,
         );
     // Fonts and icon textures settle over a few frames.
     harness.run_steps(6);
+    if o.more_menu {
+        harness.get_by_label("More").click();
+        harness.run_steps(3);
+    }
     let image = harness.render()?;
     image.save(&o.out).map_err(|e| format!("cannot write {}: {e}", o.out))
 }

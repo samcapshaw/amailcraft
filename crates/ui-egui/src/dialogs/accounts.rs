@@ -23,6 +23,9 @@ use serde_json::{Value, json};
 
 use super::common::{self, Dlg, Out, btn, btn_en, footer, heading, muted, primary, window, with_state};
 use crate::App;
+
+mod connection;
+mod setup;
 use mailcraft_engine::accounts::{AccountOptions, DownloadMode};
 use mailcraft_engine::sync::{PushMode, TestReport};
 use mailcraft_model::{Account, AccountId, AccountKind, Security};
@@ -155,7 +158,13 @@ fn mac_accounts(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
         ctx,
         app,
         d.uid,
-        |app| SettingsState { email: app.s.mailbox.accounts.first().map(|a| a.id.0), ..Default::default() },
+        |app| SettingsState {
+            email: d
+                .u64("account")
+                .and_then(|v| u32::try_from(v).ok())
+                .or_else(|| app.s.mailbox.accounts.first().map(|a| a.id.0)),
+            ..Default::default()
+        },
         |st, app| {
             window(ctx, app, d, "Accounts", 790.0, |ui, app| {
                 let accounts = app.s.mailbox.accounts.clone();
@@ -257,6 +266,11 @@ fn mac_accounts(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                                     }
                                 });
                                 });
+                            ui.add_space(12.0);
+                            if a.kind == AccountKind::Graph {
+                                connection::account_status(ui, app, a);
+                                connection::account_services(ui, app, a);
+                            }
                             ui.add_space(18.0);
                             ui.horizontal_wrapped(|ui| {
                                 if ui
@@ -967,7 +981,12 @@ impl Wizard {
 fn wizard(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
     let change = d.u64("change").and_then(|v| u32::try_from(v).ok());
     let init = |app: &App| {
-        let mut w = Wizard { name: d.str("name"), address: d.str("address"), ..Default::default() };
+        let mut w = Wizard {
+            graph: app.mac_style,
+            name: d.str("name"),
+            address: d.str("address"),
+            ..Default::default()
+        };
         if let Some(a) = change.and_then(|id| account_of(app, id)).filter(is_email) {
             w.change = Some(a.id.0);
             w.page = PAGE_SETTINGS;
@@ -997,11 +1016,18 @@ fn wizard(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
     let mut cleanup: Option<u32> = None;
     let out = with_state(ctx, app, d.uid, init, |st, app| {
         let title = if st.change.is_some() { "Change Account" } else { "Add Account" };
-        let out = window(ctx, app, d, title, 560.0, |ui, app| match st.page {
-            PAGE_EMAIL => page_email(ui, app, st),
-            PAGE_TYPE => page_type(ui, app, st),
-            PAGE_SETTINGS => page_settings(ui, app, st, d.uid),
-            _ => page_done(ui, app, st),
+        let width = if setup::polished(app) { 660.0 } else { 560.0 };
+        let out = window(ctx, app, d, title, width, |ui, app| {
+            if setup::polished(app) {
+                ui.spacing_mut().interact_size.y = 32.0;
+                ui.spacing_mut().item_spacing.y = 8.0;
+            }
+            match st.page {
+                PAGE_EMAIL => page_email(ui, app, st),
+                PAGE_TYPE => page_type(ui, app, st),
+                PAGE_SETTINGS => page_settings(ui, app, st, d.uid),
+                _ => page_done(ui, app, st),
+            }
         });
         if !out.keeps() && !st.finished {
             cleanup = st.created;
@@ -1033,23 +1059,49 @@ fn choose_graph(st: &mut Wizard) {
 }
 
 fn page_email(ui: &mut Ui, app: &mut App, st: &mut Wizard) -> Out {
-    heading(ui, app, "Add an email account");
+    if setup::polished(app) {
+        setup::header(ui, app, "Add an email account", "Bring your mail into one workspace.");
+    } else {
+        heading(ui, app, "Add an email account");
+    }
     if st.discovering {
         return page_looking_up(ui, app, st);
     }
     let mut enter = false;
-    egui::Grid::new("mc-wiz-email").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-        let r = grid_edit(ui, "Email address:", &mut st.address, "name@example.com", false);
-        enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        grid_edit(ui, "Your name:", &mut st.name, "Shown to people you send mail to", false);
-    });
-    ui.checkbox(&mut st.manual, "Let me set up my account manually");
-    muted(
-        ui,
-        app,
-        "MailCraft looks up your provider's server settings (or suggests some from your address); you can check \
-         and change them on the next page.",
-    );
+    if setup::polished(app) {
+        let width = (ui.available_width() - 12.0) / 2.0;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0;
+            if setup::choice(ui, app, "Microsoft 365", "Work or school accounts", st.graph, width) {
+                st.graph = true;
+            }
+            if setup::choice(ui, app, "Other email", "IMAP, POP or JMAP", !st.graph, width) {
+                st.graph = false;
+            }
+        });
+        ui.add_space(18.0);
+        setup::card(ui, app, "Your details", |ui| {
+            let r = setup::field(ui, "Email address:", &mut st.address, "name@example.com", false);
+            enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            setup::field(ui, "Your name:", &mut st.name, "Shown to people you send mail to", false);
+        });
+    } else {
+        egui::Grid::new("mc-wiz-email").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+            let r = grid_edit(ui, "Email address:", &mut st.address, "name@example.com", false);
+            enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            grid_edit(ui, "Your name:", &mut st.name, "Shown to people you send mail to", false);
+        });
+    }
+    if !st.graph {
+        ui.checkbox(&mut st.manual, "Let me set up my account manually");
+        muted(ui, app, "We'll look up your provider's server settings for you to review.");
+    } else {
+        muted(ui, app, "You’ll need your organization’s application ID to connect.");
+    }
+    if setup::polished(app) && ui.link("Shared or delegated mailbox…").clicked() {
+        return Out::close_open("addSharedMailbox", json!({}));
+    }
+    ui.add_space(10.0);
     if !st.error.is_empty() {
         ui.colored_label(app.theme.danger, &st.error);
     }
@@ -1058,11 +1110,16 @@ fn page_email(ui: &mut Ui, app: &mut App, st: &mut Wizard) -> Out {
         if btn(ui, "Cancel") {
             return Out::Close;
         }
-        if btn_en(ui, ok, "Microsoft 365…") {
+        if !setup::polished(app) && btn_en(ui, ok, "Microsoft 365…") {
             choose_graph(st);
             return Out::Keep;
         }
-        if primary(ui, app, ok, "Connect") || (ok && enter) {
+        if primary(ui, app, ok, if setup::polished(app) { "Continue" } else { "Connect" }) || (ok && enter) {
+            if st.graph {
+                choose_graph(st);
+                return Out::Keep;
+            }
+            st.extra.oauth_open = false;
             st.error.clear();
             st.discovered = None;
             match try_run(app, "accounts.discover", json!({"address": st.address.trim(), "refresh": true})) {
@@ -1127,29 +1184,47 @@ fn page_looking_up(ui: &mut Ui, app: &mut App, st: &mut Wizard) -> Out {
 }
 
 fn page_type(ui: &mut Ui, app: &mut App, st: &mut Wizard) -> Out {
-    heading(ui, app, "Advanced setup");
-    ui.label(format!("Choose the account type for {}:", st.address.trim()));
-    ui.add_space(6.0);
     let mut pick: Option<(bool, bool)> = None;
-    ui.horizontal(|ui| {
-        for (jmap, pop3, label, desc) in [
-            (false, false, "IMAP", "Reads mail with IMAP and sends it with SMTP (most providers)."),
-            (
-                false,
-                true,
-                "POP",
-                "Downloads mail with POP3 and sends it with SMTP; folders stay on this computer.",
-            ),
-            (true, false, "JMAP", "One JSON-over-HTTPS server for reading and sending (RFC 8620/8621)."),
-        ] {
-            let r = ui
-                .add_sized([120.0, 60.0], egui::Button::new(RichText::new(label).size(16.0)))
-                .on_hover_text(desc);
-            if r.clicked() {
-                pick = Some((jmap, pop3));
+    if setup::polished(app) {
+        setup::header(ui, app, "Advanced setup", "Choose how your provider connects.");
+        let width = (ui.available_width() - 24.0) / 3.0;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0;
+            for (jmap, pop3, label, caption) in [
+                (false, false, "IMAP", "Synced mail folders"),
+                (false, true, "POP", "Downloaded mail"),
+                (true, false, "JMAP", "Mail over HTTPS"),
+            ] {
+                if setup::choice(ui, app, label, caption, false, width) {
+                    pick = Some((jmap, pop3));
+                }
             }
-        }
-    });
+        });
+        ui.add_space(18.0);
+    } else {
+        heading(ui, app, "Advanced setup");
+        ui.label(format!("Choose the account type for {}:", st.address.trim()));
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            for (jmap, pop3, label, desc) in [
+                (false, false, "IMAP", "Reads mail with IMAP and sends it with SMTP (most providers)."),
+                (
+                    false,
+                    true,
+                    "POP",
+                    "Downloads mail with POP3 and sends it with SMTP; folders stay on this computer.",
+                ),
+                (true, false, "JMAP", "One JSON-over-HTTPS server for reading and sending (RFC 8620/8621)."),
+            ] {
+                let r = ui
+                    .add_sized([120.0, 60.0], egui::Button::new(RichText::new(label).size(16.0)))
+                    .on_hover_text(desc);
+                if r.clicked() {
+                    pick = Some((jmap, pop3));
+                }
+            }
+        });
+    }
     if ui.button("Microsoft 365 (Graph)").clicked() {
         choose_graph(st);
     }
@@ -1182,13 +1257,21 @@ fn security_row(ui: &mut Ui, label: &str, salt: (&str, u64), sec: &mut usize) ->
 
 fn page_settings(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Out {
     let kind = st.kind_name();
-    heading(ui, app, &format!("{kind} Account Settings"));
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(st.address.trim()).strong());
-        if st.change.is_none() && ui.link("(Not you?)").clicked() {
-            st.page = PAGE_EMAIL;
-        }
-    });
+    let title =
+        if st.graph { "Connect Microsoft 365".to_owned() } else { format!("{kind} Account Settings") };
+    if setup::polished(app) {
+        setup::header(ui, app, &title, "Review your connection and choose what belongs in your workspace.");
+    } else {
+        heading(ui, app, &title);
+    }
+    if !st.graph {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(st.address.trim()).strong());
+            if st.change.is_none() && ui.link("(Not you?)").clicked() {
+                st.page = PAGE_EMAIL;
+            }
+        });
+    }
     if st.change.is_none() {
         if !st.found_in.is_empty() {
             muted(ui, app, &format!("{} Check them before you connect.", st.found_in));
@@ -1206,85 +1289,86 @@ fn page_settings(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Out {
             );
         }
     }
-    egui::ScrollArea::vertical().id_salt(("mc-wiz-settings", uid)).max_height(if st.graph {(ui.ctx().content_rect().height()-280.0).clamp(300.0,640.0)} else {420.0}).show(ui, |ui| {
-        if st.graph {
-            heading(ui, app, "Microsoft 365");
-            ui.label("Mail through Microsoft Graph. IMAP and SMTP are not required.");
-            muted(ui, app, "Your organization controls mailbox access and sending permissions.");
-            ui.add_space(10.0);
-            ui.label("Connected services");
-            let calendars = ui.checkbox(&mut st.graph_calendars, "Show Microsoft 365 calendars");
-            let contacts = ui.checkbox(&mut st.graph_contacts, "Show Microsoft 365 contacts");
-            let editing=ui.checkbox(&mut st.graph_editing,"Allow editing and meeting responses");
-            if calendars.changed() || contacts.changed() || editing.changed() {
-                st.extra.providers.clear();
-                if st.graph_calendars || st.graph_contacts {
-                    st.extra.provider = 0;
-                }
+    egui::ScrollArea::vertical()
+        .id_salt(("mc-wiz-settings", uid))
+        .max_height(if setup::polished(app) {
+            (ui.ctx().content_rect().height() - 290.0).clamp(180.0, 760.0)
+        } else {
+            420.0
+        })
+        .show(ui, |ui| {
+            if st.graph {
+                connection::graph_settings(ui, app, st, uid);
+                return;
             }
-            muted(ui, app, "Available offline. Calendars cover the past 90 days and the coming year; contacts sync the default address book. Editing requires a separate write grant and server permission.");
-            if st.graph_calendars || st.graph_contacts {
-                muted(ui, app, "Choose the mail, calendars and contacts provider below and sign in again to grant access. Turning a service off pauses updates and keeps its offline copy.");
-            }
-            if let Some(url) = oauth_section(ui, app, st, uid) {
-                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-            }
-            return;
-        }
 
-        if st.change.is_some() {
-            common::heading(ui, app, "Account");
-            egui::Grid::new(("mc-wiz-acct", uid)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                grid_edit(ui, "Account name:", &mut st.account_name, "", false);
-                grid_edit(ui, "Your name:", &mut st.name, "", false);
-            });
-        }
-        common::heading(ui, app, if st.jmap { "Server" } else { "Incoming mail" });
-        egui::Grid::new(("mc-wiz-in", uid)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-            if st.jmap {
-                grid_edit(ui, "Session URL:", &mut st.in_host, "https://example.com/.well-known/jmap", false);
-            } else {
-                let hint = if st.pop3 { "pop.example.com" } else { "imap.example.com" };
-                grid_edit(ui, "Server:", &mut st.in_host, hint, false);
-                st.in_port_set |= grid_port(ui, "Port:", &mut st.in_port);
-                if security_row(ui, "Encryption method:", ("mc-wiz-insec", uid), &mut st.in_sec)
-                    && !st.in_port_set
-                {
-                    st.in_port = st.in_default_port(st.in_sec);
-                }
-            }
-            grid_edit(ui, "User name:", &mut st.in_user, "Usually your email address", false);
-            let hint = if st.has_secret || st.created.is_some() {
-                "Leave empty to keep the saved password"
-            } else {
-                ""
-            };
-            grid_edit(ui, "Password:", &mut st.password, hint, true);
-        });
-        if !st.jmap && !st.receive_only {
-            common::heading(ui, app, "Outgoing mail (SMTP)");
-            egui::Grid::new(("mc-wiz-out", uid)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                grid_edit(ui, "Outgoing server:", &mut st.out_host, "smtp.example.com", false);
-                st.out_port_set |= grid_port(ui, "Outgoing port:", &mut st.out_port);
-                if security_row(ui, "Outgoing encryption:", ("mc-wiz-outsec", uid), &mut st.out_sec)
-                    && !st.out_port_set
-                {
-                    st.out_port = default_port(true, st.out_sec);
-                }
-            });
-            ui.checkbox(&mut st.out_separate, "The outgoing server uses a different user name and password");
-            if st.out_separate {
-                egui::Grid::new(("mc-wiz-outuser", uid)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                    grid_edit(ui, "Outgoing user name:", &mut st.out_user, "", false);
-                    grid_edit(ui, "Outgoing password:", &mut st.out_password, "", true);
+            if st.change.is_some() {
+                common::heading(ui, app, "Account");
+                egui::Grid::new(("mc-wiz-acct", uid)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                    grid_edit(ui, "Account name:", &mut st.account_name, "", false);
+                    grid_edit(ui, "Your name:", &mut st.name, "", false);
                 });
             }
-        }
-        more_settings(ui, app, st, uid);
-        if let Some(o) = oauth_section(ui, app, st, uid) {
-            ui.ctx().open_url(egui::OpenUrl::new_tab(o));
-        }
-    });
+            setup::card(ui, app, if st.jmap { "Server" } else { "Incoming mail" }, |ui| {
+                egui::Grid::new(("mc-wiz-in", uid)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                    if st.jmap {
+                        grid_edit(
+                            ui,
+                            "Session URL:",
+                            &mut st.in_host,
+                            "https://example.com/.well-known/jmap",
+                            false,
+                        );
+                    } else {
+                        let hint = if st.pop3 { "pop.example.com" } else { "imap.example.com" };
+                        grid_edit(ui, "Server:", &mut st.in_host, hint, false);
+                        st.in_port_set |= grid_port(ui, "Port:", &mut st.in_port);
+                        if security_row(ui, "Encryption method:", ("mc-wiz-insec", uid), &mut st.in_sec)
+                            && !st.in_port_set
+                        {
+                            st.in_port = st.in_default_port(st.in_sec);
+                        }
+                    }
+                    grid_edit(ui, "User name:", &mut st.in_user, "Usually your email address", false);
+                    let hint = if st.has_secret || st.created.is_some() {
+                        "Leave empty to keep the saved password"
+                    } else {
+                        ""
+                    };
+                    grid_edit(ui, "Password:", &mut st.password, hint, true);
+                });
+            });
+            if !st.jmap && !st.receive_only {
+                setup::card(ui, app, "Outgoing mail (SMTP)", |ui| {
+                    egui::Grid::new(("mc-wiz-out", uid)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                        grid_edit(ui, "Outgoing server:", &mut st.out_host, "smtp.example.com", false);
+                        st.out_port_set |= grid_port(ui, "Outgoing port:", &mut st.out_port);
+                        if security_row(ui, "Outgoing encryption:", ("mc-wiz-outsec", uid), &mut st.out_sec)
+                            && !st.out_port_set
+                        {
+                            st.out_port = default_port(true, st.out_sec);
+                        }
+                    });
+                    ui.checkbox(
+                        &mut st.out_separate,
+                        "The outgoing server uses a different user name and password",
+                    );
+                    if st.out_separate {
+                        egui::Grid::new(("mc-wiz-outuser", uid)).num_columns(2).spacing([10.0, 6.0]).show(
+                            ui,
+                            |ui| {
+                                grid_edit(ui, "Outgoing user name:", &mut st.out_user, "", false);
+                                grid_edit(ui, "Outgoing password:", &mut st.out_password, "", true);
+                            },
+                        );
+                    }
+                });
+            }
+            more_settings(ui, app, st, uid);
+            if let Some(o) = oauth_section(ui, app, st, uid) {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(o));
+            }
+        });
     if st.unencrypted() {
         // Without this the password is never sent in clear text, so the sign-in fails.
         ui.checkbox(&mut st.allow_plain, ALLOW_PLAIN);
@@ -1301,7 +1385,13 @@ fn page_settings(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Out {
         if btn(ui, "Cancel") {
             out = Out::Close;
         }
-        let label = if st.change.is_some() { "Save" } else { "Connect" };
+        let label = if st.graph {
+            "Save account"
+        } else if st.change.is_some() {
+            "Save"
+        } else {
+            "Connect"
+        };
         if primary(ui, app, ok, label) {
             match st.save(app) {
                 Ok(_) => {
@@ -1385,145 +1475,256 @@ fn oauth_section(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Optio
     if let Some(link) = st.change.and_then(|id| account_of(app, id)).and_then(|a| a.linked_mailbox) {
         ui.label(format!("Sign in as {} to open this mailbox.", link.principal_address));
     }
-    let r = egui::CollapsingHeader::new(if st.graph { "Sign in to Microsoft 365" } else { "Sign in with OAuth 2.0 instead of a password" })
-        .id_salt(("mc-wiz-oauth", uid))
-        .open(if st.extra.oauth_open { Some(true) } else { None })
-        .show(ui, |ui| {
-            if st.extra.providers.is_empty() {
-                let list = try_run(app, "accounts.oauthProviders", json!({})).unwrap_or_default();
-                let mut v: Vec<(String, String, bool)> = list
-                    .get("providers")
-                    .and_then(Value::as_array)
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|p| {
-                                let device = p.get("flows").and_then(Value::as_array).is_some_and(|f| f.iter().any(|x| x == "device"));
-                                let id = p.get("id")?.as_str()?;
-                                if st.graph != id.starts_with("microsoft-graph") { return None; }
-                                Some((id.to_owned(), p.get("name")?.as_str()?.to_owned(), device))
-                            })
-                            .collect()
+    let flat = st.graph && setup::polished(app);
+    let graph = st.graph;
+    let expanded = st.extra.oauth_open;
+    let mut render = |ui: &mut Ui| {
+        if st.extra.providers.is_empty() {
+            let list = try_run(app, "accounts.oauthProviders", json!({})).unwrap_or_default();
+            let mut v: Vec<(String, String, bool)> = list
+                .get("providers")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|p| {
+                            let device = p
+                                .get("flows")
+                                .and_then(Value::as_array)
+                                .is_some_and(|f| f.iter().any(|x| x == "device"));
+                            let id = p.get("id")?.as_str()?;
+                            if st.graph {
+                                if id != connection::graph_provider(st) {
+                                    return None;
+                                }
+                            } else if id.starts_with("microsoft-graph") {
+                                return None;
+                            }
+                            Some((id.to_owned(), p.get("name")?.as_str()?.to_owned(), device))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if v.is_empty() {
+                v.push((String::new(), "(none available)".into(), false));
+            }
+            // Restore the configured provider before guessing from the mailbox's domain.
+            let saved_provider = st
+                .change
+                .and_then(|id| account_of(app, id))
+                .and_then(|a| mailcraft_engine::accounts::account_options(&app.s, a.id).oauth)
+                .map(|b| b.provider)
+                .filter(|id| {
+                    !st.graph
+                        || if st.graph_editing {
+                            id == "microsoft-graph-pim-write"
+                        } else {
+                            !(st.graph_calendars || st.graph_contacts) || id != "microsoft-graph"
+                        }
+                });
+            let domain = st.domain();
+            if let Some(i) =
+                v.iter().position(|(id, _, _)| Some(id) == saved_provider.as_ref()).or_else(|| {
+                    v.iter().position(|(id, _, _)| {
+                        (st.graph
+                            && id
+                                == if st.graph_editing {
+                                    "microsoft-graph-pim-write"
+                                } else if st.graph_calendars || st.graph_contacts {
+                                    "microsoft-graph-pim"
+                                } else {
+                                    "microsoft-graph"
+                                })
+                            || (id == "google" && (domain == "gmail.com" || domain == "googlemail.com"))
+                            || (id == "microsoft"
+                                && ["outlook.com", "hotmail.com", "live.com", "msn.com"]
+                                    .contains(&domain.as_str()))
                     })
-                    .unwrap_or_default();
-                if v.is_empty() {
-                    v.push((String::new(), "(none available)".into(), false));
-                }
-                // Restore the configured provider before guessing from the mailbox's domain.
-                let saved_provider = st.change.and_then(|id| account_of(app, id))
-                    .and_then(|a| mailcraft_engine::accounts::account_options(&app.s, a.id).oauth)
-                    .map(|b| b.provider)
-                    .filter(|id| !st.graph || if st.graph_editing {id=="microsoft-graph-pim-write"} else { !(st.graph_calendars || st.graph_contacts) || id!="microsoft-graph" });
-                let domain = st.domain();
-                if let Some(i) = v.iter().position(|(id, _, _)| Some(id) == saved_provider.as_ref()).or_else(|| v.iter().position(|(id, _, _)| {
-                    (st.graph && id == if st.graph_editing {"microsoft-graph-pim-write"} else if st.graph_calendars || st.graph_contacts { "microsoft-graph-pim" } else { "microsoft-graph" }) || (id == "google" && (domain == "gmail.com" || domain == "googlemail.com"))
-                        || (id == "microsoft" && ["outlook.com", "hotmail.com", "live.com", "msn.com"].contains(&domain.as_str()))
-                })) {
-                    st.extra.provider = i;
-                }
-                st.extra.providers = v;
+                })
+            {
+                st.extra.provider = i;
             }
-            muted(
-                ui,
-                app,
-                if st.graph { "Use a public-client app registration from your organization. Enter its client ID." } else { "MailCraft has no built-in registration with any provider. Register an application with your provider and enter its client id (and client secret, if the provider issued one)." },
-            );
-            let e = &mut st.extra;
+            st.extra.providers = v;
+        }
+        muted(
+            ui,
+            app,
+            if st.graph {
+                "Use a public-client app registration from your organization. Enter its client ID."
+            } else {
+                "MailCraft has no built-in registration with any provider. Register an application with your provider and enter its client id (and client secret, if the provider issued one)."
+            },
+        );
+        let e = &mut st.extra;
+        if st.graph && setup::polished(app) {
+            setup::field(ui, "Application ID:", &mut e.client_id, "From your app registration", false);
+        } else {
             egui::Grid::new(("mc-wiz-oauth-grid", uid)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                let l = ui.label("Provider:");
-                let names: Vec<&str> = e.providers.iter().map(|p| p.1.as_str()).collect();
-                let r = ui.scope(|ui| common::combo_idx(ui, ("mc-wiz-prov", uid), &mut e.provider, &names, 280.0));
-                let _ = r.response.labelled_by(l.id);
-                ui.end_row();
-                grid_edit(ui, "Client id:", &mut e.client_id, "From your app registration", false);
-                if !st.graph { grid_edit(ui, "Client secret:", &mut e.client_secret, "Only if the provider issued one", true); }
+                if !st.graph {
+                    let l = ui.label("Provider:");
+                    let names: Vec<&str> = e.providers.iter().map(|p| p.1.as_str()).collect();
+                    let r = ui.scope(|ui| {
+                        common::combo_idx(ui, ("mc-wiz-prov", uid), &mut e.provider, &names, 280.0)
+                    });
+                    let _ = r.response.labelled_by(l.id);
+                    ui.end_row();
+                }
+                grid_edit(
+                    ui,
+                    if st.graph { "Application ID:" } else { "Client id:" },
+                    &mut e.client_id,
+                    "From your app registration",
+                    false,
+                );
+                if !st.graph {
+                    grid_edit(
+                        ui,
+                        "Client secret:",
+                        &mut e.client_secret,
+                        "Only if the provider issued one",
+                        true,
+                    );
+                }
             });
-            let device_ok = e.providers.get(e.provider).is_some_and(|p| p.2);
-            if !device_ok {
-                e.device = false;
-            }
+        }
+        let device_ok = e.providers.get(e.provider).is_some_and(|p| p.2);
+        if !device_ok {
+            e.device = false;
+        }
+        if st.graph {
+            egui::CollapsingHeader::new("Advanced sign-in options").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(device_ok, |ui| ui.radio_value(&mut e.device, true, "Device code"));
+                    ui.radio_value(&mut e.device, false, "Browser");
+                });
+            });
+        } else {
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(device_ok, |ui| ui.radio_value(&mut e.device, true, "Device code"));
                 ui.radio_value(&mut e.device, false, "Browser");
             });
-            st.extra.oauth_open = true;
-            let id = st.change.or(st.created);
-            let flow = id.and_then(|i| app.s.sync.oauth.get(&AccountId(i)).cloned());
-            let running = flow.as_ref().is_some_and(|f| f.status == "waiting" || f.status == "starting");
-            if running {
-                ctx_repaint(ui);
-            }
-            ui.horizontal(|ui| {
-                let ready = st.address_ok() && !st.extra.client_id.trim().is_empty() && !st.in_host.trim().is_empty();
-                if ui.add_enabled(ready && !running, egui::Button::new("Sign In")).clicked() {
-                    match st.save(app) {
-                        Ok(id) => {
-                            let e = &st.extra;
-                            let mut p = json!({
-                                "account": id,
-                                "provider": e.providers.get(e.provider).map(|p| p.0.clone()).unwrap_or_default(),
-                                "clientId": e.client_id.trim(),
-                                "flow": if e.device { "device" } else { "browser" },
-                            });
-                            if !e.client_secret.is_empty()
-                                && let Some(o) = p.as_object_mut()
-                            {
-                                o.insert("clientSecret".into(), json!(e.client_secret));
-                            }
-                            match try_run(app, "accounts.oauthSignIn", p) {
-                                Ok(v) => {
-                                    st.extra.oauth_error.clear();
-                                    open_url = v.get("authUrl").and_then(Value::as_str).map(str::to_owned);
-                                }
-                                Err(e) => st.extra.oauth_error = e,
-                            }
+        }
+        st.extra.oauth_open = true;
+        let id = st.change.or(st.created);
+        let flow = id.and_then(|i| app.s.sync.oauth.get(&AccountId(i)).cloned());
+        let running = flow.as_ref().is_some_and(|f| f.status == "waiting" || f.status == "starting");
+        if running {
+            ctx_repaint(ui);
+        }
+        ui.horizontal(|ui| {
+            let ready = st.address_ok()
+                && if st.graph {
+                    connection::valid_application_id(&st.extra.client_id)
+                } else {
+                    !st.extra.client_id.trim().is_empty()
+                }
+                && !st.in_host.trim().is_empty()
+                && st.extra.providers.get(st.extra.provider).is_some_and(|p| !p.0.is_empty())
+                && !app.s.view.work_offline;
+            if ui
+                .add_enabled(
+                    ready && !running,
+                    egui::Button::new(if st.graph { "Continue to Microsoft…" } else { "Sign In" }),
+                )
+                .clicked()
+            {
+                match st.save(app) {
+                    Ok(id) => {
+                        let e = &st.extra;
+                        let mut p = json!({
+                            "account": id,
+                            "provider": e.providers.get(e.provider).map(|p| p.0.clone()).unwrap_or_default(),
+                            "clientId": e.client_id.trim(),
+                            "flow": if e.device { "device" } else { "browser" },
+                        });
+                        if !e.client_secret.is_empty()
+                            && let Some(o) = p.as_object_mut()
+                        {
+                            o.insert("clientSecret".into(), json!(e.client_secret));
                         }
-                        Err(e) => st.extra.oauth_error = e,
-                    }
-                }
-                if running && ui.button("Cancel Sign-In").clicked()
-                    && let Some(i) = id
-                {
-                    let _ = try_run(app, "accounts.oauthCancel", json!({"account": i}));
-                }
-            });
-            if let Some(f) = &flow {
-                match f.status.as_str() {
-                    "waiting" | "starting" => {
-                        if let (Some(code), Some(uri)) = (&f.user_code, &f.verification_uri) {
-                            ui.label(format!("Go to {uri} on any device and enter this code:"));
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(code).strong().size(18.0));
-                                if ui.button("Copy").clicked() {
-                                    ui.ctx().copy_text(code.clone());
-                                }
-                                if ui.link("Open the page").clicked() {
-                                    open_url = Some(f.verification_uri_complete.clone().unwrap_or_else(|| uri.clone()));
-                                }
-                            });
-                        } else if let Some(u) = &f.auth_url {
-                            ui.label("Finish signing in in your browser; MailCraft waits for it here.");
-                            if ui.link("Open the sign-in page again").clicked() {
-                                open_url = Some(u.clone());
+                        match try_run(app, "accounts.oauthSignIn", p) {
+                            Ok(v) => {
+                                st.extra.oauth_error.clear();
+                                open_url = v.get("authUrl").and_then(Value::as_str).map(str::to_owned);
                             }
-                        } else {
-                            ui.label("Contacting the provider…");
+                            Err(e) => st.extra.oauth_error = e,
                         }
                     }
-                    "done" => {
-                        ui.colored_label(app.theme.accent, format!("Signed in with {}.", f.provider));
-                    }
-                    "cancelled" => muted(ui, app, "Sign-in was cancelled."),
-                    _ => {
-                        ui.colored_label(app.theme.danger, f.error.clone().unwrap_or_else(|| "Sign-in failed.".into()));
-                    }
+                    Err(e) => st.extra.oauth_error = e,
                 }
             }
-            if !st.extra.oauth_error.is_empty() {
-                ui.colored_label(app.theme.danger, &st.extra.oauth_error);
+            if running
+                && ui.button("Cancel Sign-In").clicked()
+                && let Some(i) = id
+            {
+                let _ = try_run(app, "accounts.oauthCancel", json!({"account": i}));
             }
         });
-    if r.body_returned.is_none() {
-        st.extra.oauth_open = false;
+        if let Some(f) = &flow {
+            match f.status.as_str() {
+                "waiting" | "starting" => {
+                    if let (Some(code), Some(uri)) = (&f.user_code, &f.verification_uri) {
+                        ui.label(format!("Go to {uri} on any device and enter this code:"));
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(code).strong().size(18.0));
+                            if ui.button("Copy").clicked() {
+                                ui.ctx().copy_text(code.clone());
+                            }
+                            if ui.link("Open the page").clicked() {
+                                open_url =
+                                    Some(f.verification_uri_complete.clone().unwrap_or_else(|| uri.clone()));
+                            }
+                        });
+                    } else if let Some(u) = &f.auth_url {
+                        ui.label("Finish signing in in your browser; MailCraft waits for it here.");
+                        if ui.link("Open the sign-in page again").clicked() {
+                            open_url = Some(u.clone());
+                        }
+                    } else {
+                        ui.label("Contacting the provider…");
+                    }
+                }
+                "done" => {
+                    ui.colored_label(
+                        app.theme.accent,
+                        if st.graph {
+                            "Microsoft sign-in saved. Test the connection to verify mailbox access."
+                                .to_owned()
+                        } else {
+                            format!("Signed in with {}.", f.provider)
+                        },
+                    );
+                }
+                "cancelled" => muted(ui, app, "Sign-in was cancelled."),
+                _ => {
+                    let error = f.error.as_deref().unwrap_or("Sign-in failed.");
+                    ui.colored_label(app.theme.danger, error);
+                    if st.graph {
+                        muted(ui, app, connection::recovery_hint(error));
+                    }
+                }
+            }
+        }
+        if !st.extra.oauth_error.is_empty() {
+            ui.colored_label(app.theme.danger, &st.extra.oauth_error);
+            if st.graph {
+                muted(ui, app, connection::recovery_hint(&st.extra.oauth_error));
+            }
+        }
+    };
+    if flat {
+        render(ui);
+    } else {
+        let r = egui::CollapsingHeader::new(if graph {
+            "Sign in to Microsoft 365"
+        } else {
+            "Sign in with OAuth 2.0 instead of a password"
+        })
+        .id_salt(("mc-wiz-oauth", uid))
+        .open(if expanded { Some(true) } else { None })
+        .show(ui, render);
+        if r.body_returned.is_none() {
+            st.extra.oauth_open = false;
+        }
     }
     open_url
 }
@@ -1535,7 +1736,15 @@ fn ctx_repaint(ui: &Ui) {
 fn page_done(ui: &mut Ui, app: &mut App, st: &mut Wizard) -> Out {
     let text =
         if st.change.is_some() { "Account successfully updated" } else { "Account successfully added" };
-    heading(ui, app, text);
+    heading(ui, app, if st.graph { "Account settings saved" } else { text });
+    if st.graph {
+        connection::wizard_status(ui, app, st);
+        muted(
+            ui,
+            app,
+            "Saving settings does not verify access. Test the connection after sign-in; the first successful sync confirms mailbox access.",
+        );
+    }
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(egui::Vec2::splat(18.0), egui::Sense::hover());
         app.icons.paint(ui, r, "check", app.theme.accent);
@@ -1913,7 +2122,7 @@ fn shared_mailbox(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                 .accounts
                 .iter()
                 .find(|a| {
-                    a.kind == AccountKind::Imap
+                    matches!(a.kind, AccountKind::Imap | AccountKind::Graph)
                         && a.credential == mailcraft_model::account::CredentialKind::OAuthToken
                         && a.linked_mailbox.is_none()
                 })
@@ -1921,14 +2130,13 @@ fn shared_mailbox(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
             ..Default::default()
         },
         |st, app| {
-            window(ctx, app, d, "Add a mailbox", 470.0, |ui, app| {
-                heading(ui, app, "Your team's mail. In one place.");
-                muted(
+            window(ctx, app, d, "Add a mailbox", 620.0, |ui, app| {
+                setup::header(
                     ui,
                     app,
-                    "Open a shared mailbox or a colleague's delegated mailbox using your own sign-in.",
+                    "Add a shared mailbox",
+                    "A team inbox or delegated mailbox, using your own sign-in.",
                 );
-                ui.add_space(12.0);
                 let accounts: Vec<_> = app
                     .s
                     .mailbox
@@ -1960,24 +2168,28 @@ fn shared_mailbox(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                     );
                 }
                 ui.add_space(12.0);
-                let label = ui.label("Mailbox address");
-                ui.add(
-                    egui::TextEdit::singleline(&mut st.address)
-                        .hint_text("team@example.com")
-                        .desired_width(f32::INFINITY),
-                )
-                .labelled_by(label.id);
-                let label = ui.label("Display name");
-                ui.add(
-                    egui::TextEdit::singleline(&mut st.name)
-                        .hint_text("Team inbox")
-                        .desired_width(f32::INFINITY),
-                )
-                .labelled_by(label.id);
                 ui.add_space(12.0);
+                setup::card(ui, app, "Mailbox details", |ui| {
+                    setup::field(ui, "Mailbox address", &mut st.address, "team@example.net", false);
+                    setup::field(ui, "Display name", &mut st.name, "Team inbox", false);
+                });
+                ui.add_space(12.0);
+                let width = (ui.available_width() - 12.0) / 2.0;
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut st.delegated, false, "Shared mailbox");
-                    ui.selectable_value(&mut st.delegated, true, "Delegated mailbox");
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    if setup::choice(ui, app, "Shared mailbox", "A shared team inbox", !st.delegated, width) {
+                        st.delegated = false;
+                    }
+                    if setup::choice(
+                        ui,
+                        app,
+                        "Delegated mailbox",
+                        "A colleague’s mailbox",
+                        st.delegated,
+                        width,
+                    ) {
+                        st.delegated = true;
+                    }
                 });
                 let graph =
                     st.owner.and_then(|id| account_of(app, id)).is_some_and(|a| a.kind == AccountKind::Graph);
@@ -2005,16 +2217,27 @@ fn shared_mailbox(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                 }
                 ui.add_space(12.0);
                 let mut out = Out::Keep;
-                ui.horizontal(|ui| {
-            if ui.add_enabled(st.owner.is_some() && !st.address.trim().is_empty(), egui::Button::new("Add mailbox")).clicked() {
-                let name = if st.name.trim().is_empty() { st.address.clone() } else { st.name.clone() };
-                match try_run(app, "accounts.addShared", json!({"account": st.owner, "address": st.address.trim(), "displayName": name, "delegated": st.delegated, "sendAs": st.send_as})) {
-                    Ok(v) => { if let Some(id) = v.get("account").and_then(Value::as_u64) { out = Out::close_open("addAccount", json!({"change": id})); } }
-                    Err(e) => st.error = e,
-                }
-            }
-            if ui.button("Cancel").clicked() { out = Out::Close; }
-        });
+                footer(ui, |ui| {
+                    if ui.button("Cancel").clicked() {
+                        out = Out::Close;
+                    }
+                    if primary(ui, app, st.owner.is_some() && !st.address.trim().is_empty(), "Add mailbox") {
+                        let name =
+                            if st.name.trim().is_empty() { st.address.clone() } else { st.name.clone() };
+                        match try_run(
+                            app,
+                            "accounts.addShared",
+                            json!({"account": st.owner, "address": st.address.trim(), "displayName": name, "delegated": st.delegated, "sendAs": st.send_as}),
+                        ) {
+                            Ok(v) => {
+                                if let Some(id) = v.get("account").and_then(Value::as_u64) {
+                                    out = Out::close_open("addAccount", json!({"change": id}));
+                                }
+                            }
+                            Err(e) => st.error = e,
+                        }
+                    }
+                });
                 out
             })
         },

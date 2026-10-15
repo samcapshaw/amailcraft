@@ -186,6 +186,38 @@ fn remove_asks_then_removes_the_account() {
 // Add Account wizard
 
 #[test]
+fn mac_graph_setup_saves_offline_without_claiming_connected() {
+    let mut app = App::new(sample_session());
+    app.mac_style = true;
+    app.s.view.work_offline = true;
+    crate::dialogs::open(&mut app, "addAccount", json!({}));
+    let mut h = harness(app);
+    set_text(&mut h, "Email address:", "owner@example.net");
+    h.get_by_label("Continue").click();
+    step(&mut h);
+    assert!(h.query_by_label("Your mailbox").is_some());
+    assert!(h.query_by_label("Services").is_some());
+    assert!(h.query_by_label("Provider:").is_none());
+    assert!(h.query_by_label("Password:").is_none());
+    h.get_by_label("Calendars").click();
+    step(&mut h);
+    h.get_by_label("Contacts").click();
+    step(&mut h);
+    h.get_by_label("Editing and meeting responses").click();
+    step(&mut h);
+    h.get_by_label("Save account").click();
+    step(&mut h);
+    assert!(h.query_by_label("Account settings saved").is_some());
+    assert!(h.query_by_label("Offline · connection paused").is_some());
+    assert!(h.query_by_label("Account successfully added").is_none());
+    let account = h.state().s.mailbox.accounts.iter().find(|a| a.address == "owner@example.net").unwrap();
+    assert_eq!(account.kind, AccountKind::Graph);
+    let options = mailcraft_engine::accounts::account_options(&h.state().s, account.id);
+    assert!(options.graph_calendars && options.graph_contacts && options.graph_editing);
+    assert!(h.state().s.secrets.get(&mailcraft_engine::accounts::secret_key(account.id, false)).is_none());
+}
+
+#[test]
 fn add_account_guesses_servers_from_the_address() {
     let mut app = sample_app();
     // Done starts a send/receive unless working offline; these hosts are guesses, never contacted.
@@ -951,4 +983,21 @@ fn add_account_name_never_comes_from_a_data_file() {
     crate::dialogs::open(&mut app, "addAccount", json!({}));
     let h = harness(app);
     assert_eq!(field_value(&h, "Your name:"), "Sam Example");
+}
+
+#[test]
+fn caldav_discovery_starts_with_a_disabled_action_and_closes_without_account_changes() {
+    let mut app = sample_app();
+    let before = app.s.mailbox.clone();
+    app.s.run("caldav.discover", &json!({})).unwrap();
+    let mut h = harness(app);
+    h.get_by_label("CalDAV endpoint");
+    h.get_by_label("App password");
+    h.get_by_label("Find calendars").click();
+    step(&mut h);
+    assert_eq!(h.state().s.mailbox, before);
+    assert!(names(&h).iter().any(|n| n == "caldavDiscovery"));
+    h.get_by_label("Close").click();
+    step(&mut h);
+    assert!(!names(&h).iter().any(|n| n == "caldavDiscovery"));
 }

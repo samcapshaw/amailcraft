@@ -636,6 +636,12 @@ fn occ_interact(app: &mut App, st: &mut ModState, resp: &egui::Response, o: &Occ
                 app.run("graph.edit", json!({"id":id.0}));
                 ui.close();
             }
+            if mailcraft_engine::cmd::connected::can_delete(&app.s, id)
+                && ui.button("Delete on Microsoft 365…").clicked()
+            {
+                app.run("graph.deleteAppointment", json!({"id":id.0}));
+                ui.close();
+            }
             let connected = app.s.mailbox.folder(o.folder).is_some_and(|f| f.graph_source.is_some());
             ui.label(
                 RichText::new(if connected {

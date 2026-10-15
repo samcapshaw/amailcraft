@@ -82,9 +82,15 @@ pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
         app.run("view.folderPane", json!({"mode":if shown {"off"}else{"normal"}}));
     }
     c.add_space(8.0);
-    c.label(RichText::new("MailCraft").size(16.0).strong());
-    let tools =
-        Rect::from_min_max(pos2(left.right(), toolbar.top()), pos2(toolbar.right(), toolbar.top() + 58.0));
+    let title = RichText::new(if app.theme.terminal_style { "◇ MailCraft" } else { "MailCraft" })
+        .font(app.theme.detail_font(16.0))
+        .strong()
+        .color(if app.theme.terminal_style { app.theme.importance_low } else { app.theme.text });
+    c.label(title);
+    let tools = Rect::from_min_max(
+        pos2((toolbar.right() - 650.0).max(left.right()), toolbar.top()),
+        pos2(toolbar.right(), toolbar.top() + 58.0),
+    );
     let mut c = child(ui, tools.shrink2(vec2(12.0, 0.0)), "mac-tools", Layout::left_to_right(Align::Center));
     let mail = app.mail_like_module();
     let selected = !app.s.selection.items.is_empty() || app.s.selection.focus.is_some();
@@ -101,69 +107,60 @@ pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
         module_toolbar(&mut c, app, frame);
     }
     c.menu_button("More", |ui| {
+        ui.set_min_width(248.0);
+        ui.spacing_mut().item_spacing.y = 5.0;
+        ui.label(
+            RichText::new(if mail { "Mail tools" } else { "Tools" }).size(12.0).color(app.theme.text_muted),
+        );
+        ui.add_space(4.0);
         if mail {
-            for (label, cmd) in [
-                ("Reply", "mail.reply"),
-                ("Reply all", "mail.replyAll"),
-                ("Forward", "mail.forward"),
-                ("Flag", "mail.flag"),
-            ] {
-                if ui.add_enabled(selected, egui::Button::new(label)).clicked() {
-                    app.run(cmd, json!({}));
-                    ui.close();
-                }
-            }
+            more_item(ui, app, "quick-steps", "Quick steps…", "", "quicksteps.manage", json!({}));
+            more_item(ui, app, "filter", "Rules…", "", "rules.manage", json!({}));
         } else {
             ui.menu_button("All tools", |ui| crate::ribbon::module_tools_menu(ui, app));
         }
         ui.separator();
-        if ui.button("Get new mail").clicked() {
-            app.run("sendReceive.all", json!({}));
-            ui.close();
-        }
-        if mail {
-            ui.menu_button("Reading layout", |ui| {
-                for (label, position) in
-                    [("Below messages", "bottom"), ("Reader on right", "right"), ("Hidden", "off")]
-                {
-                    if ui.button(label).clicked() {
-                        app.run("view.readingPane", json!({"position":position}));
-                        ui.close();
-                    }
-                }
-            });
-            if ui.button("Toggle Focused inbox").clicked() {
-                app.run("view.focusedInbox", json!({}));
-                ui.close();
-            }
-        }
-        for (label, cmd) in [
-            ("Accounts…", "file.accountSettings"),
-            ("Mail settings…", "file.options"),
-            ("Rules…", "rules.manage"),
-        ] {
-            if ui.button(label).clicked() {
-                app.run(cmd, json!({}));
-                ui.close();
-            }
-        }
-        if ui.button("Add shared or delegated mailbox…").clicked() {
-            app.ui.dialogs.push(("addSharedMailbox".into(), json!({})));
-            ui.close();
-        }
+        more_item(ui, app, "folder-open", "Import…", "", "file.openExport", json!({}));
+        more_item(ui, app, "save", "Export…", "", "file.openExport", json!({"export":true}));
         ui.separator();
-        for (label, cmd) in [
-            ("Mail", "nav.mail"),
-            ("Calendar", "nav.calendar"),
-            ("People", "nav.people"),
-            ("Tasks", "nav.tasks"),
-            ("Notes", "nav.notes"),
-        ] {
-            if ui.button(label).clicked() {
-                app.run(cmd, json!({}));
+        ui.menu_button("View & connection", |ui| {
+            more_item(ui, app, "sync", "Get new mail", "", "sendReceive.all", json!({}));
+            if mail {
+                ui.menu_button("Reading layout", |ui| {
+                    for (label, position) in
+                        [("Below messages", "bottom"), ("Reader on right", "right"), ("Hidden", "off")]
+                    {
+                        if ui.button(label).clicked() {
+                            app.run("view.readingPane", json!({"position":position}));
+                            ui.close();
+                        }
+                    }
+                });
+                if ui.button("Toggle Focused inbox").clicked() {
+                    app.run("view.focusedInbox", json!({}));
+                    ui.close();
+                }
+            }
+            more_item(ui, app, "calendar", "Find CalDAV calendars…", "", "caldav.discover", json!({}));
+            if ui.button("Accounts…").clicked() {
+                app.run("file.accountSettings", json!({}));
                 ui.close();
             }
-        }
+            if ui.button("Add shared or delegated mailbox…").clicked() {
+                app.ui.dialogs.push(("addSharedMailbox".into(), json!({})));
+                ui.close();
+            }
+        });
+        ui.separator();
+        more_item(
+            ui,
+            app,
+            "settings",
+            "Settings…",
+            if cfg!(target_os = "macos") { "⌘ ," } else { "Ctrl ," },
+            "file.options",
+            json!({}),
+        );
     });
     if mail {
         if frame.width < 680.0 {
@@ -191,6 +188,54 @@ pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
         let mut c = child(ui, content, "mac-content", Layout::top_down(Align::Min));
         crate::chrome::content_area(&mut c, app, frame);
     }
+    if app.theme.terminal_style {
+        ui.painter().rect_stroke(
+            rect.shrink(0.5),
+            2,
+            Stroke::new(1.0, app.theme.accent),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
+fn more_item(
+    ui: &mut Ui,
+    app: &mut App,
+    icon: &str,
+    label: &str,
+    shortcut: &str,
+    command: &str,
+    params: serde_json::Value,
+) {
+    let (rect, response) = ui.allocate_exact_size(vec2(248.0, 36.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    if response.hovered() || response.has_focus() {
+        ui.painter().rect_filled(rect, 4, app.theme.hover);
+    }
+    app.icons.paint(
+        ui,
+        Rect::from_center_size(pos2(rect.left() + 17.0, rect.center().y), vec2(18.0, 18.0)),
+        icon,
+        app.theme.text,
+    );
+    ui.painter().text(
+        pos2(rect.left() + 39.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(15.0),
+        app.theme.text,
+    );
+    ui.painter().text(
+        pos2(rect.right() - 10.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        shortcut,
+        app.theme.detail_font(12.0),
+        app.theme.text_muted,
+    );
+    if response.clicked() {
+        app.run(command, params);
+        ui.close();
+    }
 }
 
 fn module_toolbar(ui: &mut Ui, app: &mut App, frame: &Frame) {
@@ -202,7 +247,14 @@ fn module_toolbar(ui: &mut Ui, app: &mut App, frame: &Frame) {
         _ => return,
     };
     if widgets::icon_button(ui, app, icon, label, true).clicked() {
-        app.run(cmd, json!({"form":true}));
+        let folder = app.s.selection.folder;
+        if app.s.view.module == Module::Calendar
+            && app.s.mailbox.folder(folder).is_some_and(|f| f.graph_source.is_some())
+        {
+            app.run("graph.createAppointment", json!({"folder":folder.0}));
+        } else {
+            app.run(cmd, json!({"form":true}));
+        }
     }
     if app.s.view.module == Module::Calendar
         && frame.width >= 700.0
@@ -215,7 +267,11 @@ fn module_toolbar(ui: &mut Ui, app: &mut App, frame: &Frame) {
 
 /// Persistent, compact navigation keeps the full application visible from every module.
 fn module_navigation(ui: &mut Ui, app: &mut App, rect: Rect) {
-    ui.painter().rect_filled(rect, 0, app.theme.chrome);
+    ui.painter().rect_filled(
+        rect,
+        0,
+        if app.theme.terminal_style { app.theme.backdrop.gamma_multiply(0.82) } else { app.theme.chrome },
+    );
     ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(0.5, app.theme.separator));
     let labels = rect.width() >= 560.0;
     let width = if labels { 106.0 } else { ((rect.width() - 24.0) / 5.0).clamp(28.0, 64.0) };
@@ -239,14 +295,20 @@ fn module_navigation(ui: &mut Ui, app: &mut App, rect: Rect) {
         if selected || r.hovered() {
             ui.painter().rect_filled(
                 row,
-                6,
+                if app.theme.terminal_style { 3 } else { 6 },
                 if selected { app.theme.selected_folder } else { app.theme.hover },
             );
         }
         if r.has_focus() {
             ui.painter().rect_stroke(row, 6, Stroke::new(1.0, app.theme.accent), egui::StrokeKind::Inside);
         }
-        let ink = if selected { app.theme.text } else { app.theme.text_muted };
+        let ink = if selected && app.theme.terminal_style {
+            app.theme.importance_low
+        } else if selected {
+            app.theme.text
+        } else {
+            app.theme.text_muted
+        };
         let x = if labels { row.left() + 17.0 } else { row.center().x };
         app.icons.paint(ui, Rect::from_center_size(pos2(x, row.center().y), vec2(15.0, 15.0)), icon, ink);
         if labels {
@@ -254,13 +316,34 @@ fn module_navigation(ui: &mut Ui, app: &mut App, rect: Rect) {
                 pos2(row.left() + 31.0, row.center().y),
                 egui::Align2::LEFT_CENTER,
                 label,
-                egui::FontId::proportional(12.0),
+                app.theme.detail_font(12.0),
                 ink,
             );
         }
         if r.on_hover_text(label).clicked() {
             app.run(cmd, json!({}));
         }
+    }
+    if app.theme.terminal_style && rect.width() > 860.0 {
+        let status = app.s.sync_status();
+        let (label, ink) = if app.s.view.work_offline {
+            ("● Offline", app.theme.text_muted)
+        } else if status.busy {
+            ("● Syncing", app.theme.importance_low)
+        } else if status.accounts.iter().any(|s| s.error.is_some()) {
+            ("● Needs attention", app.theme.flag)
+        } else if status.accounts.iter().any(|s| s.last_sync.is_some()) {
+            ("● Synced", app.theme.complete)
+        } else {
+            ("● Ready", app.theme.complete)
+        };
+        ui.painter().text(
+            pos2(rect.right() - 18.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            label,
+            app.theme.detail_font(12.0),
+            ink,
+        );
     }
 }
 
@@ -271,10 +354,16 @@ fn search_field(ui: &mut Ui, app: &mut App, rect: Rect) {
         app.ui.search_text.clone_from(&app.s.view.search);
     }
     let th = app.theme.clone();
-    let fill = if th.dark { th.chrome } else { egui::Color32::from_rgb(246, 246, 248) };
+    let fill = if th.terminal_style {
+        if th.dark { egui::Color32::from_rgb(22, 22, 32) } else { th.reading }
+    } else if th.dark {
+        th.chrome
+    } else {
+        egui::Color32::from_rgb(246, 246, 248)
+    };
     ui.painter().rect(
         rect,
-        8,
+        if th.terminal_style { 3 } else { 8 },
         fill,
         Stroke::new(
             if focused { 1.0 } else { 0.5 },
@@ -289,8 +378,9 @@ fn search_field(ui: &mut Ui, app: &mut App, rect: Rect) {
     let edit = c.add(
         egui::TextEdit::singleline(&mut app.ui.search_text)
             .id(id)
-            .hint_text(RichText::new("Search mail").size(14.0).color(th.text_muted))
-            .font(egui::FontId::proportional(14.0))
+            .font(th.detail_font(14.0))
+            .hint_text(RichText::new("Search mail").font(th.detail_font(14.0)).color(th.text_muted))
+            .font(th.detail_font(14.0))
             .frame(egui::Frame::NONE)
             .desired_width((c.available_width() - if clear { 28.0 } else { 0.0 }).max(20.0))
             .vertical_align(Align::Center),
@@ -318,7 +408,11 @@ fn sidebar_heading(ui: &mut Ui, app: &App, title: &str) {
     ui.add_space(if ui.clip_rect().height() < 650.0 { 10.0 } else { 18.0 });
     ui.horizontal(|ui| {
         ui.add_space(20.0);
-        ui.label(RichText::new(title).size(13.0).strong().color(app.theme.text_muted));
+        ui.label(
+            RichText::new(if app.theme.terminal_style { title.to_uppercase() } else { title.to_owned() })
+                .font(app.theme.detail_font(12.0))
+                .color(app.theme.text_muted),
+        );
     });
     ui.add_space(8.0);
 }
@@ -341,6 +435,13 @@ fn sidebar_entry(
             paint,
             7,
             if selected { app.theme.selected_folder } else { app.theme.hover },
+        );
+    }
+    if selected && app.theme.terminal_style {
+        ui.painter().rect_filled(
+            Rect::from_min_size(paint.min, vec2(2.0, paint.height())),
+            0,
+            app.theme.importance_low,
         );
     }
     app.icons.paint(
@@ -700,6 +801,8 @@ mod tests {
         h.run();
         assert!(h.state().s.view.search.contains("hasattachments:yes"));
         h.get_by_label("More").click();
+        h.run();
+        h.get_by_label_contains("View & connection").click();
         h.run();
         h.get_by_label_contains("Reading layout").click();
         h.run();

@@ -11,20 +11,20 @@
 # shellcheck disable=SC2034
 
 # Reverse-DNS application id: desktop file, AppStream id, icon name, Flatpak id, macOS bundle id.
-APP_ID="saint.dev.MailCraft"
+APP_ID="io.github.samcapshaw.amailcraft"
 APP_NAME="MailCraft"
-APP_SUMMARY="Desktop mail, calendar and contacts in the classic three-pane layout"
+APP_SUMMARY="Desktop mail and organizer with Apple styled, PC and Omarchy interfaces"
 # Executables shipped in every package.
 APP_BINS="mailcraft mailcraft-cli"
 
 # GitHub repository (owner/name): homepage, issues, releases.
-GH_OWNER="MonkeySaint"
-GH_REPO="mailcraft"
+GH_OWNER="samcapshaw"
+GH_REPO="amailcraft"
 HOMEPAGE="https://github.com/$GH_OWNER/$GH_REPO"
 # Files on the default branch (AppStream screenshots).
 RAW_URL="https://raw.githubusercontent.com/$GH_OWNER/$GH_REPO/master"
 # deb/rpm Maintainer/Packager (Debian policy wants a name and an address).
-MAINTAINER="${MAILCRAFT_MAINTAINER:-MonkeySaint <monkey@saint.dev>}"
+MAINTAINER="${MAILCRAFT_MAINTAINER:-MailCraft contributors <samcapshaw@users.noreply.github.com>}"
 VENDOR="MailCraft contributors"
 LICENSE_SPDX="MIT OR Apache-2.0"
 

@@ -93,8 +93,8 @@ calendar, contact and task editors use the same form controls and blue save acti
 
 ## Appearance profiles
 
-Settings → General → Make it yours offers Apple, Outlook layout, and Omarchy/Tokyo Night.
-Apple remains the default for the desktop app. Outlook restores the inherited ribbon layout;
+Settings → Appearance → Make it yours offers Apple styled, PC layout, and Omarchy/Tokyo Night.
+Apple remains the default for the desktop app. PC restores the inherited ribbon layout;
 Omarchy keeps the compact layout with navy, blue and lavender colors. All profiles support
 Light, Dark and Auto. These settings apply to mail, settings, compose and organizer windows.
 
@@ -104,7 +104,7 @@ Invalid hex values are refused before applying any of the pending edits. Custom 
 a fixed palette in both appearances until customization is turned off.
 
 Profiles use the existing validated settings store and persist across launches.
-`mailcraft --interface apple|outlook|omarchy` explicitly selects and saves a profile;
+`mailcraft --interface apple|pc|omarchy` explicitly selects and saves a profile;
 without the flag the saved selection is used. On Linux, Omarchy styling is confined to this app.
 Microsoft 365 Graph mail and All Sent are implemented separately from appearance profiles.
 Calendar/contact creation/deletion and broader editing remain backend work; see [Graph setup and limits](microsoft365.md).
@@ -112,3 +112,33 @@ Calendar/contact creation/deletion and broader editing remain backend work; see 
 Connected Microsoft 365 calendars and default contacts can now be enabled in Graph account settings. They use read-only offline snapshots, with an explicit source strip and refresh action. See [connected-service setup and limits](microsoft365.md#connected-calendars-and-contacts).
 
 Connected organizer items also support optional, server-confirmed edits and attendee responses through the dedicated Microsoft 365 sheets. Generic cached-item editors stay read-only. Enable the separate editing grant and refresh; see [editing setup and limits](microsoft365.md#editing-and-meeting-responses).
+
+The Omarchy profile adds a crisp blue window outline, indigo surfaces, lavender text, cyan navigation accents, square sender avatars, and monospace chrome and mailbox metadata. Message prose stays proportional. These details apply only to the Omarchy profile; custom colors retain its geometry. The footer reports offline, syncing, attention, ready, or a previously successful sync from actual local state.
+
+
+The settings workspace groups Application and Mail/Organizer categories, with less common options under More settings. Accounts presents connected mailbox cards and staged sender/sidebar defaults; Appearance has the layout and palette chooser. Search narrows categories and setting sections. Default and sidebar preferences apply on Save Changes and are discarded on Cancel; opening account setup/details performs its own account workflow.
+
+The desktop More menu groups Quick steps and Rules, Import and Export, View & connection, and Settings. Command-comma opens Settings on macOS (Control-comma on other desktop platforms). Export starts the existing file wizard with an export action selected.
+
+Compose uses a quieter title/action bar, separated address rows, optional formatting tools, and a persistent signature/status footer. Draft status distinguishes unsaved changes from a local save; it does not claim server draft synchronization. Reader attachments appear below the body in full-width cards, followed by reply controls.
+
+### Follow the active Omarchy theme
+
+In Settings → Appearance, choose Omarchy and enable **Follow Omarchy theme**, then Save Changes.
+The desktop app reads `$XDG_STATE_HOME/omarchy/current/theme/colors.toml`, or
+`~/.local/state/omarchy/current/theme/colors.toml` when XDG_STATE_HOME is unset. It checks
+for changes every two seconds while rendering. The palette supplies colors and light/dark mode;
+custom colors override its colors when enabled. Missing, unreadable, oversized or invalid palettes
+fall back to the built-in Tokyo Night appearance. This integration is read-only and is unavailable
+in the web host. The parser supports flat quoted hex color assignments and Omarchy's mode field.
+
+This implementation uses the public [Omarchy palette format](https://github.com/basecamp/omarchy/blob/master/themes/tokyo-night/colors.toml); no Omamail code was imported.
+
+### Other calendar providers
+
+**More → View & connection → Find CalDAV calendars…** checks an HTTPS CalDAV endpoint and lists its calendars. This is a discovery tool, with transient credentials; it does not yet add or sync those calendars. See [CalDAV discovery](caldav.md).
+
+Account setup uses the same grouped forms as Settings: provider choice cards, larger identity fields,
+separate incoming/outgoing server sections and aligned service switches. Shared/delegated setup is
+also reachable from the first Add Account screen. Microsoft 365 sign-in stays visible; advanced
+sign-in and server options remain expandable. Saving settings still does not verify mailbox access.

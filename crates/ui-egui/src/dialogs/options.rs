@@ -5,6 +5,7 @@
 //! matching dialogs or run the matching commands.
 
 mod appearance;
+mod workspace;
 
 use egui::{Context, RichText};
 use serde_json::{Map, Value, json};
@@ -185,6 +186,9 @@ fn sections(page: &str) -> Vec<Section> {
 #[derive(Clone, Default)]
 struct OptState {
     page: usize,
+    filter: String,
+    default_account: Option<u32>,
+    show_sidebar: Option<bool>,
     /// Section to scroll to when the window opens (`options.open` with an alias such as `editorAdvanced`).
     scroll_to: Option<String>,
     /// Edited values (key → value); untouched keys show their current value.
@@ -225,7 +229,11 @@ pub(crate) fn show(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
     let want = d.str("page");
     let section = d.str("section");
     let init = |_: &App| OptState {
-        page: settings::PAGES.iter().position(|(id, _)| *id == want).unwrap_or(0),
+        page: match d.str("workspace").as_str() {
+            "accounts" => 100,
+            "appearance" => 101,
+            _ => settings::PAGES.iter().position(|(id, _)| *id == want).unwrap_or(0),
+        },
         scroll_to: (!section.is_empty()).then(|| section.clone()),
         ..Default::default()
     };
@@ -304,101 +312,52 @@ pub(crate) fn show(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
 
 /// Mac settings keep navigation separate from grouped, consistently aligned forms.
 fn mac_options(ctx: &Context, app: &mut App, d: &Dlg<'_>, uid: u64, st: &mut OptState) -> Out {
-    window(ctx, app, d, "Settings", 880.0, |ui, app| {
+    window(ctx, app, d, "Settings", 1040.0, |ui, app| {
         let mut out = Out::Keep;
         let card = app.theme.card_surface();
         let edge = app.theme.control_edge();
-        let height = (ctx.content_rect().height() - 230.0).clamp(240.0, 490.0);
-        ui.add_space(8.0);
-        ui.horizontal_top(|ui| {
-            egui::Frame::new().fill(app.theme.chrome).corner_radius(10).inner_margin(10).show(ui, |ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(170.0);
-                    ui.set_min_height(height + 60.0);
-                    ui.label(RichText::new("MAILCRAFT").size(10.0).color(app.theme.text_muted));
-                    ui.add_space(9.0);
-                    for (i, (_, title)) in settings::PAGES.iter().enumerate() {
-                        if i == 7 || i == 10 {
-                            ui.add_space(12.0);
-                        }
-                        let selected = st.page == i;
-                        let (rect, r) = ui.allocate_exact_size(egui::vec2(170.0, 28.0), egui::Sense::click());
-                        if selected || r.hovered() {
-                            if selected {
-                                ui.painter().rect_filled(
-                                    rect.translate(egui::vec2(0.0, 1.0)),
-                                    6,
-                                    egui::Color32::from_black_alpha(if app.theme.dark { 25 } else { 10 }),
-                                );
-                            }
-                            ui.painter().rect_filled(
-                                rect,
-                                6,
-                                if selected {
-                                    if app.theme.custom_surfaces { app.theme.selected } else { card }
-                                } else {
-                                    app.theme.hover
-                                },
-                            );
-                        }
-                        let icon = match i {
-                            1 => "mail",
-                            2 => "calendar",
-                            3 => "people",
-                            4 => "person",
-                            5 => "tasks",
-                            6 => "search",
-                            9 => "ellipsis",
-                            10 => "ribbon-display",
-                            11 => "quick-steps",
-                            12 => "plus",
-                            13 => "private",
-                            _ => "settings",
-                        };
-                        app.icons.paint(
-                            ui,
-                            egui::Rect::from_center_size(
-                                rect.left_center() + egui::vec2(18.0, 0.0),
-                                egui::vec2(14.0, 14.0),
-                            ),
-                            icon,
-                            if selected { app.theme.text } else { app.theme.text_muted },
-                        );
-                        ui.painter().text(
-                            rect.left_center() + egui::vec2(35.0, 0.0),
-                            egui::Align2::LEFT_CENTER,
-                            title,
-                            egui::FontId::proportional(12.0),
-                            if selected { app.theme.text } else { app.theme.text_muted },
-                        );
-                        r.widget_info(|| {
-                            egui::WidgetInfo::selected(
-                                egui::WidgetType::SelectableLabel,
-                                true,
-                                selected,
-                                *title,
-                            )
-                        });
-                        if r.clicked() {
-                            st.page = i;
-                            st.scroll_to = None;
-                            st.note.clear();
-                        }
-                    }
-                    ui.add_space(12.0);
-                    if ui.add_sized([170.0, 28.0], egui::Button::new("Accounts…")).clicked() {
-                        out = Out::open("accountSettings", json!({}));
-                    }
-                });
+        let height = (ctx.content_rect().height() - 440.0).clamp(220.0, 520.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("MailCraft / Settings")
+                    .font(app.theme.detail_font(18.0))
+                    .color(if app.theme.terminal_style { app.theme.importance_low } else { app.theme.text }),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut st.filter)
+                        .hint_text("Search settings")
+                        .desired_width(260.0),
+                )
+                .on_hover_text("Find settings by category or setting name");
             });
+        });
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(16.0);
+        ui.horizontal_top(|ui| {
+            workspace::navigation(ui, app, st, height);
             ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.set_width((ui.available_width() - 8.0).max(250.0));
+                if st.page == 100 {
+                    out = workspace::accounts(ui, app, st, height);
+                    return;
+                }
+                if st.page == 101 {
+                    ui.label(RichText::new("Appearance").size(28.0));
+                    muted(ui, app, "Your layout, colors, and interface style.");
+                    ui.add_space(20.0);
+                    egui::ScrollArea::vertical().max_height(height).show(ui, |ui| {
+                        appearance::chooser(ui, app, st);
+                    });
+                    return;
+                }
                 let Some((pid, title)) = settings::PAGES.get(st.page).copied() else {
                     return;
                 };
                 ui.add_space(3.0);
-                ui.label(RichText::new(title).size(25.0));
+                ui.label(RichText::new(title).size(28.0));
                 let desc = DESCRIPTIONS.iter().find(|(p, _)| *p == pid).map_or("", |(_, t)| *t);
                 ui.label(RichText::new(desc).size(12.0).color(app.theme.text_muted));
                 ui.add_space(16.0);
@@ -408,9 +367,6 @@ fn mac_options(ctx: &Context, app: &mut App, d: &Dlg<'_>, uid: u64, st: &mut Opt
                     .min_scrolled_height(height)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        if pid == "general" {
-                            appearance::chooser(ui, app, st);
-                        }
                         let mut groups = sections(pid);
                         groups.retain(|section| section.heading != "Appearance");
                         if pid == "general" {
@@ -426,6 +382,15 @@ fn mac_options(ctx: &Context, app: &mut App, d: &Dlg<'_>, uid: u64, st: &mut Opt
                                 ui.scroll_to_cursor(Some(egui::Align::TOP));
                                 st.scroll_to = None;
                             }
+                            if !st.filter.trim().is_empty()
+                                && !sec.heading.to_lowercase().contains(&st.filter.to_lowercase())
+                                && !sec
+                                    .defs
+                                    .iter()
+                                    .any(|d| d.label.to_lowercase().contains(&st.filter.to_lowercase()))
+                            {
+                                continue;
+                            }
                             ui.add_space(4.0);
                             ui.label(
                                 RichText::new(match sec.heading {
@@ -434,9 +399,12 @@ fn mac_options(ctx: &Context, app: &mut App, d: &Dlg<'_>, uid: u64, st: &mut Opt
                                     "Start up options" => "Startup",
                                     other => other,
                                 })
-                                .size(12.0)
-                                .strong()
-                                .color(app.theme.text_muted),
+                                .font(app.theme.detail_font(14.0))
+                                .color(if app.theme.terminal_style {
+                                    app.theme.draft
+                                } else {
+                                    app.theme.text
+                                }),
                             );
                             ui.add_space(7.0);
                             egui::Frame::new()
@@ -525,6 +493,15 @@ fn mac_options(ctx: &Context, app: &mut App, d: &Dlg<'_>, uid: u64, st: &mut Opt
         ui.add_space(16.0);
         ui.separator();
         ui.add_space(5.0);
+        muted(
+            ui,
+            app,
+            if st.edits.is_empty() && st.default_account.is_none() && st.show_sidebar.is_none() {
+                "No unsaved changes"
+            } else {
+                "Changes will apply when you save"
+            },
+        );
         footer(ui, |ui| {
             if btn(ui, "Cancel") {
                 return Out::Close;
@@ -686,6 +663,11 @@ fn mac_setting(ui: &mut egui::Ui, app: &App, uid: u64, st: &mut OptState, d: &'s
 /// Applies the edits; returns the settings that were refused.
 fn apply(ctx: &Context, app: &mut App, st: &OptState) -> Vec<String> {
     let mut errors = Vec::new();
+    if let Some(id) = st.default_account
+        && !app.s.mailbox.accounts.iter().any(|a| a.id.0 == id && a.can_send())
+    {
+        return vec!["The chosen sending account is no longer available.".into()];
+    }
     for key in settings::PALETTE_KEYS {
         if let Some(value) = st.edits.get(*key)
             && let Some(def) = settings::def(key)
@@ -704,6 +686,18 @@ fn apply(ctx: &Context, app: &mut App, st: &OptState) -> Vec<String> {
         if let Err(e) = app.s.run("options.set", &json!({"key": k, "value": v})) {
             let label = settings::def(k).map_or(k.as_str(), |d| d.label).trim_end_matches(':').to_owned();
             errors.push(format!("{label}: {e}"));
+        }
+    }
+    if errors.is_empty() {
+        if let Some(id) = st.default_account
+            && let Err(e) = app.s.run("accounts.setDefault", &json!({"account":id}))
+        {
+            errors.push(e.to_string());
+        }
+        if let Some(show) = st.show_sidebar
+            && let Err(e) = app.s.run("view.folderPane", &json!({"mode":if show {"normal"}else{"off"}}))
+        {
+            errors.push(e.to_string());
         }
     }
     common::sync_mirror(ctx, app);
@@ -978,6 +972,8 @@ mod tests {
         app.enable_mac_style();
         app.run("options.open", json!({"page":"general"})).unwrap();
         let mut h = harness(app);
+        h.get_by_label("Appearance").click();
+        h.run_steps(2);
         h.get_by_label("Omarchy").click();
         h.run_steps(2);
         assert_eq!(h.state().s.settings.text("general.interface"), "apple");
@@ -987,7 +983,9 @@ mod tests {
         let mut app = h.into_state();
         app.run("options.open", json!({"page":"general"})).unwrap();
         let mut h = harness(app);
-        h.get_by_label("Outlook layout").click();
+        h.get_by_label("Appearance").click();
+        h.run_steps(2);
+        h.get_by_label("PC").click();
         h.run_steps(2);
         h.get_by_label("Save Changes").click();
         h.run_steps(2);
@@ -997,13 +995,43 @@ mod tests {
         app.mac_style = false;
         app.run("options.open", json!({"page":"general"})).unwrap();
         let mut h = harness(app);
-        h.get_by_label("Apple").click();
+        h.get_by_label("Appearance").click();
+        h.run_steps(2);
+        h.get_by_label("Apple styled").click();
         h.run_steps(2);
         h.get_by_label("Save Changes").click();
         h.run_steps(2);
         assert_eq!(h.state().s.settings.text("general.interface"), "apple");
     }
 
+    #[test]
+    fn account_sidebar_preference_waits_for_save_and_cancel_discards_it() {
+        let mut app = App::new(sample_session());
+        app.enable_mac_style();
+        app.run("options.open", json!({})).unwrap();
+        let mut h = harness(app);
+        h.run_steps(2);
+        h.get_by_label("Accounts").click();
+        h.run_steps(2);
+        let original = h.state().s.view.folder_pane;
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Show account sidebar").click();
+        h.run_steps(2);
+        assert_eq!(h.state().s.view.folder_pane, original);
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert_eq!(h.state().s.view.folder_pane, original);
+        let mut app = h.into_state();
+        app.run("options.open", json!({})).unwrap();
+        let mut h = harness(app);
+        h.run_steps(2);
+        h.get_by_label("Accounts").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Show account sidebar").click();
+        h.run_steps(2);
+        h.get_by_label("Save Changes").click();
+        h.run_steps(2);
+        assert_eq!(h.state().s.view.folder_pane, mailcraft_model::FolderPaneState::Off);
+    }
     #[test]
     fn mac_settings_save_and_cancel_preserve_engine_behavior() {
         let mut app = App::new(sample_session());

@@ -4,11 +4,8 @@
 # A pushed tag vX.Y.Z builds every package and publishes a GitHub release with them and SHA256SUMS.
 # Run by hand (workflow_dispatch) it builds the same packages as run artifacts and publishes nothing.
 #
-# Jobs: version check, Linux x86_64 (ubuntu-latest) and aarch64 (ubuntu-24.04-arm) with tar.gz, deb, rpm and
-# AppImage, Flatpak (x86_64), web, Windows MSI + zip (windows-latest), macOS universal DMG (macos-latest) and
-# FreeBSD tar.gz + pkg (a FreeBSD VM on ubuntu-latest). A repository variable RELEASE_WINDOWS,
-# RELEASE_MACOS or RELEASE_FREEBSD set to `false` skips that platform; skipped platforms do not hold the
-# release back, failed ones do.
+# Jobs: version check, Linux x86_64/aarch64 (tar.gz, deb, rpm, AppImage), Windows x86_64
+# (MSI + zip), universal macOS (DMG), and publish only after all three platforms succeed.
 name: release
 
 on:
@@ -29,20 +26,21 @@ env:
 jobs:
   version-check:
     runs-on: ubuntu-latest
-    container:
-      image: rust:1.99-bookworm
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
-      - name: Tag matches the workspace version
-        # xtask reads the tag from GITHUB_REF (refs/tags/vX.Y.Z); not a tag: nothing to check.
-        run: cargo xtask version check
-      - name: Version
+      - name: Validate version and release notes
         id: version
         run: |
-          v="$(cargo xtask version show)"
+          source packaging/env.sh
+          v="$MC_VERSION"
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$v" ]]; then
+            echo "Tag must match workspace version v$v" >&2
+            exit 1
+          fi
+          test -f "docs/releases/$v.md"
           case "$v" in *-*) pre=true ;; *) pre=false ;; esac
           echo "version=$v" >>"$GITHUB_OUTPUT"
           echo "prerelease=$pre" >>"$GITHUB_OUTPUT"
@@ -88,87 +86,18 @@ jobs:
         run: packaging/linux/package.sh --build --target "${{ matrix.target }}" --out dist
       - name: AppImage
         run: packaging/linux/appimage.sh --target "${{ matrix.target }}" --out dist
+      - name: Binary smoke checks
+        run: |
+          "target/${{ matrix.target }}/release/mailcraft" --version
+          "target/${{ matrix.target }}/release/mailcraft-cli" --version
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.arch }}
           path: dist/
           if-no-files-found: error
 
-  flatpak:
-    needs: linux
-    runs-on: ubuntu-latest
-    container:
-      # trixie: bookworm's flatpak-builder 1.2 calls appstream-compose, which the 25.08 SDK no longer has.
-      image: debian:trixie
-      # flatpak-builder sandboxes every build step with bubblewrap, which needs a privileged container.
-      options: --privileged
-    steps:
-      - name: Tools
-        run: |
-          apt-get update -q
-          apt-get install -y -q --no-install-recommends git ca-certificates curl flatpak flatpak-builder librsvg2-common
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: linux-x86_64
-          path: dist/linux
-      - name: Cache Flatpak runtime
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/share/flatpak
-          key: flatpak-freedesktop-25.08
-      - name: Flatpak bundle
-        run: |
-          tarball="$(ls dist/linux/mailcraft-*-linux-x86_64.tar.gz)"
-          packaging/linux/flatpak/flatpak-bundle.sh --tarball "$tarball" --arch x86_64 --out dist/flatpak
-      - uses: actions/upload-artifact@v4
-        with:
-          name: flatpak-x86_64
-          path: dist/flatpak/
-          if-no-files-found: error
-
-  web:
-    needs: version-check
-    runs-on: ubuntu-latest
-    container:
-      image: rust:1.99-bookworm
-    env:
-      TRUNK_VERSION: "0.21.14"
-    steps:
-      - uses: actions/checkout@v4
-      - name: Trust the checkout (container user differs from the runner's)
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            /usr/local/cargo/registry
-            /usr/local/cargo/git
-            target
-          key: release-web-${{ hashFiles('Cargo.lock') }}
-      - name: Tools (zip, Trunk)
-        run: |
-          apt-get update -q
-          apt-get install -y -q --no-install-recommends zip
-          rustup target add wasm32-unknown-unknown
-          # Trunk (MIT OR Apache-2.0) release binary; without it package.sh uses cargo + wasm-bindgen-cli.
-          url="https://github.com/trunk-rs/trunk/releases/download/v$TRUNK_VERSION/trunk-x86_64-unknown-linux-gnu.tar.gz"
-          if curl -fsSL --retry 3 "$url" | tar -xz -C /usr/local/bin trunk; then
-            trunk --version
-          else
-            echo "Trunk download failed; packaging/web/package.sh falls back to wasm-bindgen-cli"
-          fi
-      - name: Web build
-        run: packaging/web/package.sh --out dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: web
-          path: dist/
-          if-no-files-found: error
-
   windows:
     needs: version-check
-    if: vars.RELEASE_WINDOWS != 'false'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -183,6 +112,13 @@ jobs:
           WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: ./packaging/windows/package.ps1 -Target x86_64-pc-windows-msvc -OutDir dist
+      - name: Binary smoke checks
+        shell: pwsh
+        run: |
+          & target/x86_64-pc-windows-msvc/release/mailcraft.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "mailcraft smoke check failed" }
+          & target/x86_64-pc-windows-msvc/release/mailcraft-cli.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "mailcraft-cli smoke check failed" }
       - name: Icon resource and MSI shortcut icon
         shell: pwsh
         run: |
@@ -196,7 +132,6 @@ jobs:
 
   macos:
     needs: version-check
-    if: vars.RELEASE_MACOS != 'false'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -213,42 +148,23 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: packaging/macos/package.sh --out dist
+      - name: Universal binary smoke checks
+        run: |
+          target/packaging/macos/MailCraft.app/Contents/MacOS/mailcraft --version
+          target/packaging/macos/MailCraft.app/Contents/MacOS/mailcraft-cli --version
       - uses: actions/upload-artifact@v4
         with:
           name: macos-universal
           path: dist/
           if-no-files-found: error
 
-  freebsd:
-    needs: version-check
-    if: vars.RELEASE_FREEBSD != 'false'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build, tar.gz and pkg (FreeBSD VM)
-        uses: vmactions/freebsd-vm@v1
-        with:
-          release: "14.3"
-          usesh: true
-          envs: "CARGO_TERM_COLOR CARGO_BUILD_JOBS CARGO_INCREMENTAL"
-          prepare: |
-            pkg install -y bash git rust
-          run: |
-            git config --global --add safe.directory "$PWD"
-            bash packaging/freebsd/package.sh --build --out dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: freebsd
-          path: dist/
-          if-no-files-found: error
-
   publish:
-    needs: [version-check, linux, flatpak, web, windows, macos, freebsd]
-    # Tag pushes only; skipped platforms are fine, a failed one stops the release.
+    needs: [version-check, linux, windows, macos]
+    # Tag pushes only; every requested platform must succeed.
     if: >-
       ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v')
       && needs.version-check.result == 'success' && needs.linux.result == 'success'
-      && needs.flatpak.result == 'success' && needs.web.result == 'success'
+      && needs.windows.result == 'success' && needs.macos.result == 'success'
       && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     permissions:
@@ -269,20 +185,9 @@ jobs:
           cat SHA256SUMS
       - name: Release notes
         env:
-          TAG: ${{ github.ref_name }}
           VERSION: ${{ needs.version-check.outputs.version }}
         run: |
-          prev="$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)"
-          range="$TAG"
-          [ -n "$prev" ] && range="$prev..$TAG"
-          {
-            echo "MailCraft $VERSION."
-            echo
-            echo "Downloads: Linux (tar.gz, .deb, .rpm, AppImage, Flatpak), Windows (MSI, zip), macOS (DMG), FreeBSD (tar.gz, pkg) and web (zip). Check them against SHA256SUMS."
-            echo
-            echo "Changes${prev:+ since $prev}:"
-            git log --no-merges --format='- %s' "$range"
-          } >dist/notes.md
+          cp "docs/releases/$VERSION.md" dist/notes.md
           cat dist/notes.md
       - name: Publish the release
         env:

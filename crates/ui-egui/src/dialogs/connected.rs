@@ -1,4 +1,5 @@
 //! Focused Microsoft 365 edit/response sheets. Changes go through the engine's durable write queue.
+mod lifecycle;
 use super::common::{self, Dlg, Out, footer, muted, primary, window, with_state};
 use crate::App;
 use egui::{Context, RichText, TextEdit};
@@ -9,6 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn show(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Option<Out> {
     Some(match d.name {
+        "graphCreateAppointment" => lifecycle::create(ctx, app, d),
+        "graphDeleteAppointment" => lifecycle::delete(ctx, app, d),
         "graphItem" => edit(ctx, app, d),
         "graphPending" => review(ctx, app, d),
         _ => return None,
@@ -288,7 +291,13 @@ fn review(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                                 .get(&op.item)
                                 .map(|a| a.subject.clone())
                                 .or_else(|| app.s.mailbox.contacts.get(&op.item).map(|c| c.full_name()))
-                                .unwrap_or_else(|| "Unavailable item".into());
+                                .unwrap_or_else(|| {
+                                    op.payload
+                                        .get("subject")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("Unavailable item")
+                                        .into()
+                                });
                             ui.label(RichText::new(title).strong());
                             muted(
                                 ui,
@@ -296,7 +305,12 @@ fn review(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                                 &format!(
                                     "{} · {} · {}",
                                     op.mailbox,
-                                    if op.action == "patch" { "Edit" } else { &op.action },
+                                    match op.action.as_str() {
+                                        "patch" => "Edit",
+                                        "create" => "New appointment",
+                                        "delete" => "Delete appointment",
+                                        _ => &op.action,
+                                    },
                                     match op.status.as_str() {
                                         "inFlight" => "Sending",
                                         "queued" => "Queued",
@@ -311,7 +325,7 @@ fn review(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                             ui.collapsing("Proposed changes", |ui| {
                                 if let Some(fields) = op.payload.as_object() {
                                     for (key, value) in fields {
-                                        if key == "sendResponse" {
+                                        if key == "sendResponse" || key == "transactionId" {
                                             continue;
                                         }
                                         let value = proposal_text(value);

@@ -1,8 +1,8 @@
 # MailCraft Mac roadmap
 
-This is the Mac-focused fork at [samcapshaw/amailcraft](https://github.com/samcapshaw/amailcraft),
+This is the multi-style desktop fork at [samcapshaw/amailcraft](https://github.com/samcapshaw/amailcraft),
 based on [MonkeySaint/mailcraft](https://github.com/MonkeySaint/mailcraft). **Status: pre-alpha.**
-The goal is a refined Mac mail experience with useful multi-account and shared-mailbox workflows.
+The goal is a refined mail experience with Apple styled, PC, and Omarchy interfaces with useful multi-account and shared-mailbox workflows.
 
 ## Implemented in this fork
 
@@ -11,13 +11,14 @@ The goal is a refined Mac mail experience with useful multi-account and shared-m
 | Mac shell | Compact toolbar and search, neutral icons, light/dark appearances, system font loading on macOS |
 | Unified mailboxes | Combined Inbox and Sent folders, scoped search, source-aware message actions |
 | Graph mail | Initial OAuth Graph transport, folder discovery, delta/MIME sync, read/flag/move/delete and sending; local fixture validation |
-| Connected organizer | Opt-in Graph calendars (90 days back, one year ahead) and default contacts; offline snapshots, selected conditional edits, attendee responses and persistent pending-change review |
+| CalDAV discovery | Read-only endpoint/principal/home lookup and calendar listing, transient credentials; no event sync or saved CalDAV accounts yet |
+| Connected organizer | Opt-in Graph calendars (90 days back, one year ahead) and default contacts; offline snapshots, selected conditional edits, single timed appointment creation/deletion, attendee responses and persistent pending-change review |
 | Linked mailboxes | Shared/delegated labels, independent OAuth grants, receive-only default, explicit Send As opt-in |
 | Compose | Visible sender and signature selector, compact formatting row, optional Cc/Bcc, deeper tools in menus |
 | Settings | Icon navigation, layered grouped forms, aligned controls, switches, appearance selector, Save/Cancel |
-| Account manager | Mailbox list and details, connection actions, linked-mailbox entry point, advanced options |
+| Account manager | Guided Microsoft 365 setup, automatic consent profile selection, connection and requested-service status, recovery guidance, linked-mailbox entry point and advanced options |
 | Organizer | Persistent Mail/Calendar/Contacts/Tasks/Notes navigation, contextual creation actions, deeper module tools in menus |
-| Appearance profiles | Saved Apple, Outlook layout and Omarchy/Tokyo Night profiles, Light/Dark/Auto, custom palette editor and previews |
+| Appearance profiles | Saved Apple styled, PC layout and Omarchy/Tokyo Night profiles, Light/Dark/Auto, custom palette editor and previews |
 | Identity | Original envelope icon, separate Mac profile and `dev.mailcraft.mac` bundle identifier |
 
 ## Next priorities
@@ -26,7 +27,7 @@ The goal is a refined Mac mail experience with useful multi-account and shared-m
 - Verify keyboard navigation, accessibility, and narrow-window behavior throughout the Mac shell.
 - Validate linked mailbox OAuth and Send As behavior against a Microsoft 365 tenant before claiming production compatibility.
 - Validate the initial Graph transport against a tenant; add richer permission feedback and broader mail operations.
-- Add calendar/contact creation/deletion, broader organizer/shared-calendar workflows and custom contact folders; add a configurable delegated sending mode.
+- Add meeting creation/cancellation, recurring-series operations, contact creation/deletion, broader organizer/shared-calendar workflows and custom contact folders; add a configurable delegated sending mode.
 - Prepare a signed, notarized Mac distribution and fork-specific release process.
 
 See [Mac account setup and limits](docs/mac.md) for implemented behavior and known gaps.

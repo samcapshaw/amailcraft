@@ -29,8 +29,8 @@ pub(super) fn chooser(ui: &mut Ui, app: &App, st: &mut OptState) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         for (id, title, caption) in [
-            ("outlook", "Outlook layout", "Ribbon & classic panes"),
-            ("apple", "Apple", "Quiet & spacious"),
+            ("outlook", "PC", "Ribbon & classic panes"),
+            ("apple", "Apple styled", "Quiet & spacious"),
             ("omarchy", "Omarchy", "Tokyo Night flourishes"),
         ] {
             let t = preset(id, dark);
@@ -75,6 +75,12 @@ pub(super) fn chooser(ui: &mut Ui, app: &App, st: &mut OptState) {
     ui.add_space(10.0);
     if let Some(def) = mailcraft_engine::settings::def("general.theme") {
         super::mac_setting(ui, app, 0, st, def);
+    }
+    if selected == "omarchy" {
+        if let Some(def) = mailcraft_engine::settings::def("general.followOmarchy") {
+            super::mac_setting(ui, app, 0, st, def);
+        }
+        ui.label(RichText::new("Uses the active Omarchy colors and light/dark mode. Falls back to Tokyo Night if unavailable. Custom colors take priority.").size(12.0).color(app.theme.text_muted));
     }
     ui.add_space(8.0);
     egui::Frame::new()

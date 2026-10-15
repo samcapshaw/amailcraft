@@ -275,7 +275,11 @@ fn detect_import(path: &Path) -> Result<&'static str, CmdError> {
 
 fn open_export(s: &mut Session, p: &Value) -> CmdResult {
     let Some(action) = opt_str(p, "action") else {
-        return dialog(s, "importExport", json!({}));
+        return dialog(
+            s,
+            "importExport",
+            json!({"export":p.get("export").and_then(Value::as_bool).unwrap_or(false)}),
+        );
     };
     let path = PathBuf::from(req_str(p, "path")?);
     let action = if action == "import" { detect_import(&path)? } else { action };

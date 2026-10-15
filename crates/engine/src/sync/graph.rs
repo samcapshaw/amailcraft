@@ -40,11 +40,7 @@ pub(super) fn build_job(s: &Session, a: &Account, plan: &Plan) -> Result<Option<
                     && op.status == "queued"
                     && op.mailbox == a.address
                     && a.incoming.as_ref().is_some_and(|i| i.host == op.endpoint)
-                    && (if op.action == "patch" {
-                        crate::cmd::connected::capabilities(s, op.item).0
-                    } else {
-                        crate::cmd::connected::capabilities(s, op.item).1
-                    })
+                    && crate::cmd::connected::write_allowed(s, op)
                     && crate::accounts::account_options(s, a.id).graph_editing
             })
             .cloned()

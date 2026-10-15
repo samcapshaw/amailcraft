@@ -65,7 +65,7 @@ for b in $APP_BINS; do
 done
 
 build_number="$(git -C "$MC_ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
-sed -e "s|@APP_ID@|$APP_ID|g" -e "s|@VERSION@|${MC_VERSION%%[-+]*}|g" -e "s|@BUILD@|$build_number|g" \
+sed -e "s|@APP_ID@|dev.mailcraft.mac|g" -e "s|@VERSION@|${MC_VERSION%%[-+]*}|g" -e "s|@BUILD@|$build_number|g" \
 	"$here/Info.plist.in" >"$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist" >&2
 cp "$MC_ROOT/assets/app-icon/mailcraft.icns" "$app/Contents/Resources/mailcraft.icns"

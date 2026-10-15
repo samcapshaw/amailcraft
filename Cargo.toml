@@ -3,11 +3,11 @@ resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0-alpha.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.90"
-description = "A Mac-focused, local-first desktop mail client with unified and shared mailboxes"
+description = "A local-first desktop mail client with unified mailboxes and Apple styled, PC and Omarchy interfaces"
 
 [workspace.dependencies]
 # internal

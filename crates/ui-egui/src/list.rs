@@ -1461,6 +1461,9 @@ fn item_row(
     if let Some(fill) = fill {
         painter.rect_filled(r, 0.0, fill);
     }
+    if th.terminal_style && row.selected {
+        painter.rect_filled(Rect::from_min_size(r.min, vec2(2.0, r.height())), 0.0, th.accent);
+    }
     if row.unread {
         let bar = Rect::from_min_size(r.min + vec2(0.0, 1.0), vec2(size::UNREAD_BAR, r.height() - 2.0));
         if app.mac_style {
@@ -1907,7 +1910,7 @@ fn paint_mac_compact(
         ui,
         &row.who,
         18.0,
-        Look { bold: true, ..look },
+        Look { bold: row.unread, ..look },
         rule_color(&row.style, th.text),
         (sender_right - sender_x).max(20.0),
         1,
@@ -1960,11 +1963,29 @@ fn paint_mac_compact(
     let linked = account.is_some_and(|a| a.linked_mailbox.is_some());
     let mut meta_left = left;
     if linked {
-        app.icons.paint(ui, icon_rect(pos2(left + 7.0, r.bottom() - 16.0), 14.0), "people", th.text_muted);
+        app.icons.paint(
+            ui,
+            icon_rect(pos2(left + 7.0, r.bottom() - 16.0), 14.0),
+            "people",
+            if th.terminal_style { th.draft } else { th.text_muted },
+        );
         meta_left += 22.0;
     }
-    Text::new(ui, &meta, 12.5, false, th.text_muted, (right - meta_left).max(20.0), 1)
-        .paint(painter, pos2(meta_left, r.bottom() - 23.0));
+    if th.terminal_style {
+        let clean: String = meta.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+        let mut job = egui::text::LayoutJob::simple(
+            clean,
+            th.detail_font(12.0),
+            th.text_muted,
+            (right - meta_left).max(20.0),
+        );
+        job.wrap.max_rows = 1;
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+        painter.galley(pos2(meta_left, r.bottom() - 23.0), galley, th.text_muted);
+    } else {
+        Text::new(ui, &meta, 12.5, false, th.text_muted, (right - meta_left).max(20.0), 1)
+            .paint(painter, pos2(meta_left, r.bottom() - 23.0));
+    }
     slots
 }
 

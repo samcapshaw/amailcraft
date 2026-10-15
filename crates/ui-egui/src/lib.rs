@@ -371,6 +371,16 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         control::frame(&ctx, self);
         self.poll_sync(&ctx);
+        if (self.mac_style || self.theme_chooser_enabled)
+            && ctx.input_mut(|input| {
+                input.consume_shortcut(&egui::KeyboardShortcut::new(
+                    egui::Modifiers::COMMAND,
+                    egui::Key::Comma,
+                ))
+            })
+        {
+            self.run("file.options", serde_json::json!({}));
+        }
         keys::handle(&ctx, self, Surface::Main);
         self.drain_notices(&ctx);
         self.sync_window(&ctx);
@@ -443,6 +453,12 @@ impl App {
     }
 
     fn sync_theme(&mut self, ctx: &egui::Context) {
+        if self.theme_chooser_enabled
+            && self.s.settings.text("general.interface") == "omarchy"
+            && self.s.settings.bool("general.followOmarchy")
+        {
+            ctx.request_repaint_after(std::time::Duration::from_secs(2));
+        }
         let next = if self.theme_chooser_enabled {
             theme::Theme::for_settings(&self.s.settings, self.s.view.dark)
         } else if self.mac_style {

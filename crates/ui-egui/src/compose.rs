@@ -300,9 +300,6 @@ pub fn inline_compose(ui: &mut Ui, app: &mut App, id: u64) {
             mac_toolbar(ui, app, id);
         }
         header(ui, app, id);
-        if app.mac_style {
-            mac_signature(ui, app, id);
-        }
         attach::well(ui, app, id, if app.mac_style { 28.0 } else { WELL_INDENT });
         separator(ui, app);
         if app.mac_style {
@@ -310,7 +307,16 @@ pub fn inline_compose(ui: &mut Ui, app: &mut App, id: u64) {
         }
         let h = ui.available_height();
         let min_h = if h.is_finite() && h < 4000.0 { h.max(160.0) } else { 240.0 };
-        panes::body_with_panes(ui, app, id, min_h, false);
+        panes::body_with_panes(
+            ui,
+            app,
+            id,
+            if app.mac_style { (min_h - 48.0).max(100.0) } else { min_h },
+            false,
+        );
+        if app.mac_style {
+            mac_signature(ui, app, id);
+        }
     });
     spelling::dialog(&ctx, app, id);
     attach::save_as_dialog(&ctx, app, id);
@@ -366,16 +372,22 @@ fn compose_viewport(ui: &mut Ui, app: &mut App, cid: u64, class: ViewportClass) 
         }
         ui.add_space(if app.mac_style { 4.0 } else { 8.0 });
         header(ui, app, cid);
-        if app.mac_style {
-            mac_signature(ui, app, cid);
-        }
         attach::well(ui, app, cid, if app.mac_style { 28.0 } else { WELL_INDENT });
         separator(ui, app);
         if app.mac_style {
             mac_formatting(ui, app, cid);
-            egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 8)).show(ui, |ui| {
+            let available = ui.available_rect_before_wrap();
+            let body_rect = Rect::from_min_max(
+                available.min,
+                pos2(available.right(), (available.bottom() - 48.0).max(available.top() + 60.0)),
+            );
+            let mut body_ui =
+                ui.new_child(egui::UiBuilder::new().max_rect(body_rect).layout(Layout::top_down(Align::Min)));
+            egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 8)).show(&mut body_ui, |ui| {
                 panes::body_with_panes(ui, app, cid, 0.0, true);
             });
+            ui.advance_cursor_after_rect(body_rect);
+            mac_signature(ui, app, cid);
         } else {
             panes::body_with_panes(ui, app, cid, 0.0, true);
         }
@@ -616,7 +628,7 @@ fn field_edit(ui: &mut Ui, app: &mut App, cid: u64, f: Field, rect: Rect, label_
         .id(field_id(cid, f))
         .frame(egui::Frame::NONE)
         .text_color(app.theme.text)
-        .font(egui::FontId::proportional(if app.mac_style && f == Field::Subject { 15.0 } else { 13.0 }))
+        .font(egui::FontId::proportional(if app.mac_style { 15.0 } else { 13.0 }))
         .hint_text(if app.mac_style && f == Field::Subject { "Add a subject" } else { "" })
         .vertical_align(Align::Center)
         .desired_width(edit_rect.width());
@@ -802,6 +814,16 @@ fn mac_header(ui: &mut Ui, app: &mut App, cid: u64) {
         rows.push(Field::Bcc);
     }
     rows.push(Field::Subject);
+    let sender_badge = mailcraft_engine::compose::compose_account(&app.s.mailbox, &c.from)
+        .and_then(|id| app.s.mailbox.account(id))
+        .and_then(|a| a.linked_mailbox.as_ref())
+        .map(|link| {
+            format!(
+                "{} · {}",
+                if link.delegated { "Delegated" } else { "Shared" },
+                if link.send_as { "Send enabled" } else { "Receive only" }
+            )
+        });
     let accounts: Vec<(u32, String)> = app
         .s
         .mailbox
@@ -811,12 +833,30 @@ fn mac_header(ui: &mut Ui, app: &mut App, cid: u64) {
         .map(|a| (a.id.0, format!("{} <{}>", a.display_name, a.address)))
         .collect();
     let (rect, _) =
-        ui.allocate_exact_size(vec2(ui.available_width(), rows.len() as f32 * 38.0 + 8.0), Sense::hover());
+        ui.allocate_exact_size(vec2(ui.available_width(), rows.len() as f32 * 44.0 + 8.0), Sense::hover());
     for (i, f) in rows.into_iter().enumerate() {
-        let y = rect.top() + i as f32 * 38.0;
+        let y = rect.top() + i as f32 * 44.0;
         let label_rect = Rect::from_min_size(pos2(rect.left() + 24.0, y + 5.0), vec2(64.0, 28.0));
-        let trailing = if f == Field::To { 84.0 } else { 28.0 };
-        let field = Rect::from_min_max(pos2(rect.left() + 100.0, y), pos2(rect.right() - trailing, y + 38.0));
+        let badge_visible = f == Field::From && sender_badge.is_some() && rect.width() > 620.0;
+        let trailing = if badge_visible {
+            185.0
+        } else if f == Field::To {
+            84.0
+        } else {
+            28.0
+        };
+        if badge_visible && let Some(text) = &sender_badge {
+            let badge = Rect::from_min_size(pos2(rect.right() - 175.0, y + 7.0), vec2(150.0, 26.0));
+            ui.painter().rect_filled(badge, 5, app.theme.selected_folder);
+            ui.painter().text(
+                badge.center(),
+                egui::Align2::CENTER_CENTER,
+                text,
+                egui::FontId::proportional(11.0),
+                app.theme.accent,
+            );
+        }
+        let field = Rect::from_min_max(pos2(rect.left() + 100.0, y), pos2(rect.right() - trailing, y + 44.0));
         if f == Field::To {
             let r = ui.put(
                 Rect::from_min_size(pos2(rect.right() - 80.0, y + 5.0), vec2(56.0, 28.0)),
@@ -834,7 +874,7 @@ fn mac_header(ui: &mut Ui, app: &mut App, cid: u64) {
                 }
             });
         }
-        let label = egui::RichText::new(f.label()).size(12.0).color(app.theme.text_muted);
+        let label = egui::RichText::new(f.label()).size(13.0).color(app.theme.text_muted);
         let response = if f == Field::Subject {
             ui.put(label_rect, egui::Label::new(label))
         } else {
@@ -872,7 +912,7 @@ fn mac_header(ui: &mut Ui, app: &mut App, cid: u64) {
         if f != Field::Subject {
             ui.painter().hline(
                 rect.left() + 28.0..=rect.right() - 28.0,
-                y + 38.0,
+                y + 44.0,
                 Stroke::new(0.5, app.theme.separator.gamma_multiply(0.65)),
             );
         }
@@ -924,14 +964,26 @@ fn mac_action(ui: &mut Ui, app: &mut App, icon: &str, label: &str, primary: bool
 }
 
 fn mac_toolbar(ui: &mut Ui, app: &mut App, cid: u64) {
-    let params = json!({"compose": cid});
+    let params = json!({"compose":cid});
     let width = ui.available_width();
     let native = cfg!(target_os = "macos")
         && !ui.ctx().embed_viewports()
         && ui.ctx().viewport_id() == viewport_id(cid);
     let left = if native { 96 } else { 20 };
+    let title = app
+        .s
+        .composes
+        .get(&cid)
+        .map(|c| match c.kind {
+            mailcraft_engine::compose::ComposeKind::Reply
+            | mailcraft_engine::compose::ComposeKind::ReplyAll => "Reply",
+            mailcraft_engine::compose::ComposeKind::Forward => "Forward",
+            mailcraft_engine::compose::ComposeKind::Draft => "Draft",
+            _ => "New message",
+        })
+        .unwrap_or("New message");
     if native {
-        let rect = Rect::from_min_size(ui.cursor().min, vec2(width, 54.0));
+        let rect = Rect::from_min_size(ui.cursor().min, vec2(width, 56.0));
         if ui.interact(rect, ui.id().with(("compose-drag", cid)), Sense::drag()).drag_started() {
             ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
         }
@@ -941,25 +993,19 @@ fn mac_toolbar(ui: &mut Ui, app: &mut App, cid: u64) {
         .inner_margin(egui::Margin { left, right: 20, top: 12, bottom: 12 })
         .show(ui, |ui| {
             ui.set_width((width - f32::from(left) - 20.0).max(120.0));
-            ui.spacing_mut().item_spacing.x = 8.0;
             ui.horizontal(|ui| {
-                if mac_action(ui, app, "send", "Send", true).on_hover_text("Send message · ⌘Return").clicked()
-                {
-                    app.run("compose.send", params.clone());
-                }
-                if crate::widgets::icon_only(ui, app, "attach", "Attach", true).clicked() {
-                    let ctx = ui.ctx().clone();
-                    if !ribbon_command(&ctx, app, cid, "compose.attachFile", &params) {
-                        app.run("compose.attachFile", params.clone());
-                    }
-                }
-                let id = Id::new(("mac-compose-format", cid));
-                let mut show = ui.ctx().data_mut(|d| d.get_temp::<bool>(id)).unwrap_or(false);
-                if crate::widgets::icon_toggle(ui, app, "font-color", "Formatting", show, 30.0).clicked() {
-                    show = !show;
-                    ui.ctx().data_mut(|d| d.insert_temp(id, show));
-                }
+                ui.label(
+                    egui::RichText::new(title).font(app.theme.detail_font(17.0)).color(
+                        if app.theme.terminal_style { app.theme.importance_low } else { app.theme.text },
+                    ),
+                );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if mac_action(ui, app, "send", "Send", true)
+                        .on_hover_text("Send message · ⌘Return")
+                        .clicked()
+                    {
+                        app.run("compose.send", params.clone());
+                    }
                     ui.menu_button("More", |ui| {
                         ui.menu_button("All tools", |ui| crate::ribbon::compose_tools_menu(ui, app, cid));
                         ui.separator();
@@ -967,6 +1013,7 @@ fn mac_toolbar(ui: &mut Ui, app: &mut App, cid: u64) {
                             ("Save draft", "compose.saveDraft"),
                             ("Show Bcc", "compose.showBcc"),
                             ("Check spelling", "review.spelling"),
+                            ("Send later…", "compose.delayDelivery"),
                         ] {
                             if ui.button(label).clicked() {
                                 let ctx = ui.ctx().clone();
@@ -977,13 +1024,17 @@ fn mac_toolbar(ui: &mut Ui, app: &mut App, cid: u64) {
                             }
                         }
                     });
-                    if ui.available_width() > 100.0 {
-                        let dirty = app.s.composes.get(&cid).is_some_and(|c| c.dirty);
-                        ui.label(
-                            egui::RichText::new(if dirty { "Edited" } else { "Draft" })
-                                .size(11.0)
-                                .color(app.theme.text_muted),
-                        );
+                    let id = Id::new(("mac-compose-format", cid));
+                    let show = ui.ctx().data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+                    if crate::widgets::icon_toggle(ui, app, "font-color", "Formatting", show, 30.0).clicked()
+                    {
+                        ui.ctx().data_mut(|d| d.insert_temp(id, !show));
+                    }
+                    if crate::widgets::icon_only(ui, app, "attach", "Attach", true).clicked() {
+                        let ctx = ui.ctx().clone();
+                        if !ribbon_command(&ctx, app, cid, "compose.attachFile", &params) {
+                            app.run("compose.attachFile", params.clone());
+                        }
                     }
                 });
             });
@@ -996,7 +1047,22 @@ fn mac_signature(ui: &mut Ui, app: &mut App, cid: u64) {
     let current = app.s.composes.get(&cid).and_then(|c| c.signature.as_ref()).map(|s| s.name.clone());
     let names: Vec<String> = app.s.mailbox.signatures.iter().map(|s| s.name.clone()).collect();
     let width = ui.available_width();
-    egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 5)).show(ui, |ui| {
+    let status = app
+        .s
+        .composes
+        .get(&cid)
+        .map(|c| {
+            if c.dirty {
+                "Unsaved changes"
+            } else if c.draft.is_some() {
+                "Saved locally"
+            } else {
+                "Draft"
+            }
+        })
+        .unwrap_or("Draft");
+    separator(ui, app);
+    egui::Frame::new().fill(app.theme.chrome).inner_margin(egui::Margin::symmetric(24, 7)).show(ui, |ui| {
         ui.set_width((width - 48.0).max(180.0));
         ui.allocate_ui_with_layout(
             vec2((width - 48.0).max(180.0), 26.0),
@@ -1029,7 +1095,16 @@ fn mac_signature(ui: &mut Ui, app: &mut App, cid: u64) {
                     })
                     .response;
                 response.widget_info(|| WidgetInfo::labeled(WidgetType::ComboBox, true, "Signature"));
-                ui.label(egui::RichText::new("Signature").size(11.0).color(app.theme.text_muted));
+                ui.label(egui::RichText::new("Signature").size(12.0).color(app.theme.text_muted));
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.label(egui::RichText::new(status).font(app.theme.detail_font(12.0)).color(
+                        if app.theme.terminal_style && status == "Saved locally" {
+                            app.theme.complete
+                        } else {
+                            app.theme.text_muted
+                        },
+                    ));
+                });
             },
         );
     });

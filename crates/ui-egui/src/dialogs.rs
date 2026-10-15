@@ -14,6 +14,7 @@
 mod account_tests;
 mod accounts;
 mod alerts;
+mod caldav;
 mod categories;
 mod common;
 mod compose_dlg;
@@ -163,6 +164,9 @@ pub fn search_highlight_on(s: &mailcraft_engine::Session) -> bool {
 
 /// Dialog ids with a dedicated renderer (everything the engine emits, plus the UI's own).
 pub const KNOWN: &[&str] = &[
+    "caldavDiscovery",
+    "graphCreateAppointment",
+    "graphDeleteAppointment",
     "graphItem",
     "graphPending",
     // folders / pickers
@@ -332,6 +336,9 @@ pub const KNOWN: &[&str] = &[
 ];
 
 fn show(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
+    if d.name == "caldavDiscovery" {
+        return caldav::show(ctx, app, d);
+    }
     if d.name == "reminders" {
         // The Reminders window is the modules area's own window (it also pops up when reminders come due).
         crate::modules::open_reminders(ctx, app);

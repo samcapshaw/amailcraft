@@ -6,7 +6,7 @@
 # Expects the binaries to be built already (packaging/linux/package.sh --build does that).
 # Output: MailCraft-ARCH.AppImage and MailCraft-ARCH.AppImage.zsync. The name carries no version on purpose:
 # the update information embedded in the AppImage is
-#     gh-releases-zsync|MonkeySaint|mailcraft|latest|MailCraft-*ARCH.AppImage.zsync
+#     gh-releases-zsync|samcapshaw|amailcraft|latest|MailCraft-*ARCH.AppImage.zsync
 # and AppImageUpdate fetches the matching file from the newest GitHub release.
 #
 # Tools:

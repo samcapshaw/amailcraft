@@ -5,6 +5,7 @@
 //! (rules/quicksteps/categories/sendReceive/file/options/help).
 
 pub mod app;
+pub mod caldav;
 pub mod calendar;
 pub mod categories;
 pub mod compose;
@@ -49,6 +50,7 @@ pub fn all_specs() -> Vec<crate::CommandSpec> {
     v.extend(insert::specs());
     v.extend(review::specs());
     v.extend(calendar::specs());
+    v.extend(caldav::specs());
     v.extend(people::specs());
     v.extend(tasks::specs());
     v.extend(notes::specs());

@@ -6,12 +6,12 @@ synthetic local HTTP fixtures, **not a live Microsoft 365 tenant**.
 
 ## Setup
 
-1. In Accounts, choose Add account, enter your work/school address and choose **Microsoft 365…**.
+1. In Accounts, choose Add account, select **Microsoft 365**, enter your work/school address and choose **Continue**.
 2. Register your own public-client application in Microsoft Entra. MailCraft does not ship a client ID
    or secret. Enable the public-client/device-code flow, or configure the loopback redirect used by
    browser sign-in (see [OAuth registration](../crates/net/data/README.md)). Your organization may require
    administrator approval for the registration or consent.
-3. Choose the Microsoft 365 Graph provider, enter that registration's client ID and sign in.
+3. Choose the services to sync, then enter that registration's Application (client) ID and choose **Continue to Microsoft…**. MailCraft selects the matching consent profile automatically.
    The Graph provider requests delegated `Mail.ReadWrite`, `Mail.ReadWrite.Shared`, `Mail.Send`,
    `Mail.Send.Shared`, and `offline_access` scopes for `https://graph.microsoft.com/`.
 4. Finish setup and Get new mail. Graph uses HTTPS; IMAP and SMTP do not need to be enabled.
@@ -25,8 +25,8 @@ Graph; sign in again through the Graph provider instead.
 
 ## Connected calendars and contacts
 
-In a Graph account's settings, turn on **Show Microsoft 365 calendars** and/or **Show Microsoft 365 contacts**.
-Choose **Microsoft 365 (mail, calendars and contacts)** in the sign-in provider list and sign in again.
+In a Graph account's settings, turn on **Calendars** and/or **Contacts**.
+MailCraft selects the connected-services consent profile automatically. Sign in again to authorize it.
 This preset adds delegated `Calendars.Read.Shared` and `Contacts.Read.Shared` scopes; an older mail-only
 sign-in does not grant these permissions. Your administrator may need to approve the new consent.
 Mail-only accounts keep their existing provider and permissions.
@@ -62,7 +62,7 @@ Snapshots use bounded full reads on each poll, rather than calendar/contact delt
 
 ## Editing and meeting responses
 
-In Graph account settings, enable **Allow editing and meeting responses**. Select **Microsoft 365 (mail and organizer editing)** and sign in again. This separate preset requests `Calendars.ReadWrite.Shared` and `Contacts.ReadWrite.Shared`; enabling a local checkbox does not grant server access. Keep the calendar/contact service enabled and refresh its folders after signing in. Existing read-only grants remain available.
+In Graph account settings, enable **Editing and meeting responses**. MailCraft selects the editing consent profile; sign in again. This separate preset requests `Calendars.ReadWrite.Shared` and `Contacts.ReadWrite.Shared`; enabling a local checkbox does not grant server access. Keep the calendar/contact service enabled and refresh its folders after signing in. Existing read-only grants remain available.
 
 - In a connected calendar, open an event or its context menu and choose **Edit on Microsoft 365**. Supported fields are subject, location and timed-event start/end. The sheet provides date fields and a time picker in UTC. Command/API time values use ISO UTC or a numeric offset, including seconds. Occurrences and exceptions update only the selected occurrence; series masters and all-day date changes are refused. Meeting edits may send attendee updates, and setting a new location replaces the existing location list. Meeting bodies and online-meeting links are preserved.
 - For a meeting where you are an attendee, choose **Respond on Microsoft 365**, then Accept, Tentative or Decline, with an optional message. **Send response** sends the response to the organizer. Declining can remove the event from the calendar.
@@ -73,7 +73,7 @@ Changes are saved to a separate persistent proposal queue before network work st
 
 Conditional updates reject stale versions. Meeting responses first check that the current server version matches the version shown when the sheet opened. Failed proposals remain available; retries require explicit review of the current item and previous outcome in Outlook. A lost connection, server failure or interrupted app run holds the operation for review instead of automatically replaying it. Discarding a proposal does not undo a change Microsoft already accepted.
 
-This is an initial write path: creation/deletion, full recurrence editing, meeting cancellation, broader contact fields and organizer management still need dedicated server-backed workflows. These writes have only been exercised against synthetic local fixtures, not a live tenant. Microsoft documents [event updates](https://learn.microsoft.com/en-us/graph/api/event-update?view=graph-rest-1.0), [contact updates](https://learn.microsoft.com/en-us/graph/api/contact-update?view=graph-rest-1.0) and [meeting responses](https://learn.microsoft.com/en-us/graph/api/event-accept?view=graph-rest-1.0).
+This is an initial write path: single timed appointment creation/deletion is now available through dedicated sheets; full recurrence editing, meeting cancellation, broader contact fields and organizer management remain future work. These writes have only been exercised against synthetic local fixtures, not a live tenant. Microsoft documents [event updates](https://learn.microsoft.com/en-us/graph/api/event-update?view=graph-rest-1.0), [contact updates](https://learn.microsoft.com/en-us/graph/api/contact-update?view=graph-rest-1.0) and [meeting responses](https://learn.microsoft.com/en-us/graph/api/event-accept?view=graph-rest-1.0).
 
 Sheet previews: [event editor](images/microsoft365-edit-event.png), [contact editor](images/microsoft365-edit-contact.png), [meeting response](images/microsoft365-response.png), [pending proposals](images/microsoft365-pending.png). All use synthetic offline data.
 
@@ -111,7 +111,7 @@ folders, and message actions retain the source mailbox. Individual Sent folders 
 
 ## Still to implement
 
-Calendar/contact creation and deletion, broader organizer editing, custom contact folders, mailbox permission discovery,
+Meeting/recurring-event lifecycle operations, contact creation and deletion, broader organizer editing, custom contact folders, mailbox permission discovery,
 configurable Send As/on-behalf modes, Graph push notifications, server folder CRUD, message copy/upload,
 server draft synchronization, large-attachment upload sessions, categories and broader Graph feature parity. Unsupported server folder
 operations and copy uploads are refused; existing folders are discovered from the server. Drafts remain
@@ -119,3 +119,25 @@ local until sent. The initial mail download currently fetches the accessible fol
 caps, rather than applying the IMAP/JMAP download-months preference.
 
 EWS is not implemented. The Graph transport has no live-tenant or Linux runtime validation yet.
+
+## Connection status and recovery
+
+The Mac setup flow starts with a choice between Microsoft 365 work/school accounts and other email providers. Microsoft 365 setup separates the mailbox identity, optional connected services, and sign-in. Device-code sign-in is the default; browser redirect sign-in remains under Advanced sign-in options.
+
+**Save account** stores configuration, including unfinished setup while offline. It does not claim that authentication or mailbox access succeeded. Accounts distinguishes sign-in required, saved sign-in without a verified sync, connecting, the last successful mailbox sync, offline use, and connection errors. A successful mailbox sync does not prove all sending or organizer permissions.
+
+Use **Test connection** after sign-in. Authentication errors suggest signing in again; access-denied errors suggest checking organization consent and mailbox grants. Technical details remain available below the recovery guidance. No app registration, mailbox permission, or consent is granted by a local setting.
+
+## Create and delete connected appointments
+
+![Create a connected appointment](images/microsoft365-create-appointment.png)
+
+With Calendars and Editing enabled, use **New appointment…** in the connected calendar's source strip. Enter a subject, optional location/notes, and UTC start/end times. This first lifecycle flow supports single timed appointments within the synchronized window, without attendees or recurrence.
+
+Right-click an eligible connected appointment and choose **Delete on Microsoft 365…**, then confirm. Deletion supports only single appointments without attendees; meetings and recurring occurrences/series remain protected. The server's current item and version are checked before deletion, and the request is conditional.
+
+![Confirm connected appointment deletion](images/microsoft365-delete-appointment.png)
+
+Both actions use Pending changes and can be queued offline. A creation keeps its original transaction ID across reviewed retries to help prevent duplicate events. Unknown outcomes remain held for review. Creation also checks the server calendar's current editing permission. Cached data changes only through the subsequent successful refresh. Discarding a proposal cannot undo an accepted server operation.
+
+These flows are verified with synthetic local fixtures, not a live tenant. The implementation follows Microsoft's [event creation](https://learn.microsoft.com/en-us/graph/api/calendar-post-events?view=graph-rest-1.0) and [event deletion](https://learn.microsoft.com/en-us/graph/api/event-delete?view=graph-rest-1.0) APIs. No external application code was imported for this increment.

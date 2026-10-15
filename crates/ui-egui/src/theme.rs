@@ -1,6 +1,8 @@
 //! Colour and size tokens. Our own palette (light default, dark variant); geometry from plan/reference/layout.md.
 
 use egui::Color32;
+#[cfg(not(target_arch = "wasm32"))]
+mod omarchy;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
@@ -8,6 +10,8 @@ pub struct Theme {
     /// Use the shared Mac window and form treatment.
     pub mac_style: bool,
     pub custom_surfaces: bool,
+    /// Crisp geometry and monospace chrome for the Omarchy profile.
+    pub terminal_style: bool,
     /// Title bar, tab row and module rail.
     pub chrome: Color32,
     pub chrome_text: Color32,
@@ -88,6 +92,10 @@ pub mod size {
 }
 
 impl Theme {
+    pub fn detail_font(&self, size: f32) -> egui::FontId {
+        if self.terminal_style { egui::FontId::monospace(size) } else { egui::FontId::proportional(size) }
+    }
+
     /// The light or dark palette.
     pub fn for_dark(dark: bool) -> Theme {
         if dark { Theme::dark() } else { Theme::light() }
@@ -105,8 +113,20 @@ impl Theme {
         v.faint_bg_color = self.group_header;
         v.code_bg_color = self.info_bar;
         v.window_stroke = Stroke::new(1.0, self.separator);
-        v.window_corner_radius = CornerRadius::same(if self.mac_style { 13 } else { 8 });
-        v.menu_corner_radius = CornerRadius::same(if self.mac_style { 8 } else { 6 });
+        v.window_corner_radius = CornerRadius::same(if self.terminal_style {
+            3
+        } else if self.mac_style {
+            13
+        } else {
+            8
+        });
+        v.menu_corner_radius = CornerRadius::same(if self.terminal_style {
+            3
+        } else if self.mac_style {
+            8
+        } else {
+            6
+        });
         if self.mac_style {
             v.window_shadow =
                 egui::Shadow { offset: [0, 12], blur: 40, spread: 0, color: Color32::from_black_alpha(80) };
@@ -115,7 +135,7 @@ impl Theme {
         v.selection.stroke = Stroke::new(1.0, self.text);
         v.error_fg_color = self.danger;
         v.warn_fg_color = self.flag;
-        let radius = CornerRadius::same(4);
+        let radius = CornerRadius::same(if self.terminal_style { 2 } else { 4 });
         let w = &mut v.widgets;
         w.noninteractive.bg_fill = self.pane;
         w.noninteractive.weak_bg_fill = self.pane;
@@ -215,6 +235,13 @@ impl Theme {
             "omarchy" => Self::omarchy(dark),
             _ => Self::mac(dark),
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        if settings.text("general.interface") == "omarchy"
+            && settings.bool("general.followOmarchy")
+            && let Some(active) = omarchy::active()
+        {
+            t = active;
+        }
         if settings.bool("general.customColors") {
             let color = |key: &str, fallback| parse_hex(&settings.text(key)).unwrap_or(fallback);
             t.accent = color("general.accentColor", t.accent);
@@ -242,15 +269,16 @@ impl Theme {
     /// Tokyo Night flourishes over the compact layout, in both appearances.
     pub fn omarchy(dark: bool) -> Theme {
         let mut t = Self::mac(dark);
+        t.terminal_style = true;
         let rgb = Color32::from_rgb;
         if dark {
             t.backdrop = rgb(26, 27, 38);
-            t.chrome = rgb(36, 40, 59);
+            t.chrome = rgb(32, 35, 52);
             t.text = rgb(192, 202, 245);
             t.text_muted = rgb(142, 155, 191);
             t.accent = rgb(122, 162, 247);
-            t.separator = rgb(56, 65, 95);
-            t.selected = rgb(47, 64, 99);
+            t.separator = rgb(51, 57, 80);
+            t.selected = rgb(41, 52, 86);
             t.hover = rgb(41, 46, 66);
             t.draft = rgb(187, 154, 247);
             t.importance_low = rgb(125, 207, 255);
@@ -327,6 +355,7 @@ impl Theme {
             dark: false,
             mac_style: false,
             custom_surfaces: false,
+            terminal_style: false,
             chrome: Color32::from_rgb(0x1f, 0x4e, 0x5f),
             chrome_text: Color32::WHITE,
             backdrop: Color32::from_rgb(0xec, 0xee, 0xf1),
@@ -359,6 +388,7 @@ impl Theme {
             dark: true,
             mac_style: false,
             custom_surfaces: false,
+            terminal_style: false,
             chrome: Color32::from_rgb(0x0c, 0x0e, 0x10),
             chrome_text: Color32::from_rgb(0xe8, 0xea, 0xed),
             backdrop: Color32::from_rgb(0x15, 0x17, 0x1a),

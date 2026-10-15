@@ -1,13 +1,15 @@
-<h1 align="center">MailCraft Mac</h1>
+<h1 align="center">MailCraft</h1>
 
 <p align="center">
-  <img src="assets/app-icon/hicolor/128x128/apps/mailcraft.png" alt="MailCraft Mac: a slate-blue envelope on a porcelain tile" width="96">
+  <img src="assets/app-icon/hicolor/128x128/apps/mailcraft.png" alt="MailCraft: a slate-blue envelope on a porcelain tile" width="96">
 </p>
 
-<p align="center"><b>A quieter Mac mail app, with room for all your mailboxes.</b></p>
+<p align="center"><b>Your mail, your workspace, your style.</b></p>
+
+<p align="center"><a href="https://github.com/samcapshaw/amailcraft/releases">Preview downloads for Windows, macOS and Linux</a></p>
 
 <p align="center">
-  A Mac-focused fork of <a href="https://github.com/MonkeySaint/mailcraft">MailCraft</a>.
+  A multi-style desktop fork of <a href="https://github.com/MonkeySaint/mailcraft">MailCraft</a>.
   A compact toolbar, a unified inbox, and a refined light and dark interface over a local-first Rust mail engine.
   Built for personal mail alongside shared and delegated accounts.
 </p>
@@ -20,7 +22,7 @@
   <a href="#development">Development</a>
 </p>
 
-<img src="docs/images/mac-inbox.png" alt="MailCraft Mac unified inbox with personal, shared, and delegated mailboxes in the sidebar and a message open in the reading pane" width="100%">
+<img src="docs/images/mac-inbox.png" alt="MailCraft unified inbox with personal, shared, and delegated mailboxes in the sidebar and a message open in the reading pane" width="100%">
 
 All Inboxes brings personal, shared, and delegated Inbox folders into one view. Screenshots show the current Mac interface with synthetic demo mail; no real accounts or messages are shown. These are offscreen app renders, so the operating system's window controls are not included.
 
@@ -35,7 +37,7 @@ All Inboxes brings personal, shared, and delegated Inbox folders into one view. 
 | <img src="docs/images/mac-compose.png" alt="Compose window with a visible From identity and compact Send and Attach toolbar" width="100%"> | <img src="docs/images/mac-accounts.png" alt="Account settings with a mailbox list and separate account details" width="100%"> |
 | Visible sender and signature picker, with a slim formatting bar when needed. | Personal and linked mailboxes in a dedicated account manager. |
 
-<img src="docs/images/mac-calendar.png" alt="MailCraft Mac calendar with a month grid, calendar sidebar, event creation tools, and persistent Mail, Calendar, Contacts, Tasks, and Notes navigation" width="100%">
+<img src="docs/images/mac-calendar.png" alt="MailCraft calendar with a month grid, calendar sidebar, event creation tools, and persistent Mail, Calendar, Contacts, Tasks, and Notes navigation" width="100%">
 
 Calendar, Contacts, Tasks, and Notes stay one click away in the compact navigation bar. Calendar includes day, week, month, and schedule views, event and meeting editors, reminders, and the existing iCalendar tools. Graph accounts can also display opt-in read-only Microsoft 365 calendars and default contacts, including linked mailboxes when server permissions allow. Selected event/contact edits and attendee responses are available through an optional Graph editing grant.
 
@@ -59,22 +61,24 @@ The underlying mail engine, CLI, and MCP integration come from upstream. This fo
 | Compose | Visible From identity and signature picker, compact formatting, spelling, address completion, and attachments |
 | Accounts | Existing IMAP/SMTP, POP3, JMAP, OAuth flows, local storage, and background sync; shared/delegated OAuth IMAP setup and an initial Microsoft 365 Graph mail transport |
 | Settings | Category navigation, grouped forms, appearance selection, Save/Cancel, and a separate account manager |
-| Calendar and organizer | Persistent Calendar, Contacts, Tasks, and Notes navigation; local editing plus opt-in Microsoft 365 calendars/default contacts, selected server-confirmed edits and attendee responses |
+| Calendar and organizer | Persistent Calendar, Contacts, Tasks, and Notes navigation; local editing plus opt-in Microsoft 365 calendars/default contacts, single appointment creation/deletion, selected server-confirmed edits and attendee responses |
 | Other tools | Existing rules, quick steps, import/export, print/PDF, CLI, and MCP |
 
-See [Mac setup and limitations](docs/mac.md), [account documentation](docs/accounts.md), and the [fork roadmap](ROADMAP.md). The inherited [feature catalog](docs/parity.md) measures command coverage, not complete Outlook compatibility.
+CalDAV endpoint and calendar discovery is available as a read-only connection check; event sync is not yet implemented. See [CalDAV discovery](docs/caldav.md).
+
+See [Mac setup and limitations](docs/mac.md), [account documentation](docs/accounts.md), and the [fork roadmap](ROADMAP.md). The inherited [feature catalog](docs/parity.md) measures command coverage, not complete feature compatibility.
 
 ## Choose your interface
 
-Open **Settings → General → Make it yours** and choose a saved profile:
+Open **Settings → Appearance → Make it yours** and choose a saved profile:
 
-- **Apple** — our compact toolbar, quiet light/dark surfaces, collapsible mailboxes and right-hand reader.
-- **Outlook layout** — the inherited ribbon, folder pane and classic navigation, using MailCraft's original artwork.
-- **Omarchy** — the compact layout with Tokyo Night navy surfaces, blue selection, lavender details and softer text; a light variant is included.
+- **Apple styled** — our compact toolbar, quiet light/dark surfaces, collapsible mailboxes and right-hand reader.
+- **PC layout** — the inherited ribbon, folder pane and classic navigation, using MailCraft's original artwork.
+- **Omarchy** — the compact layout with Tokyo Night navy surfaces, blue selection, lavender details and softer text; a light variant is included. An optional **Follow Omarchy theme** setting reads your machine’s active palette.
 
-| Omarchy · Tokyo Night | Outlook layout |
+| Omarchy · Tokyo Night | PC layout |
 |---|---|
-| ![Omarchy theme with navy surfaces and blue selections](docs/images/theme-omarchy.png) | ![Classic ribbon and folder layout](docs/images/theme-outlook.png) |
+| ![Omarchy theme with navy surfaces and blue selections](docs/images/theme-omarchy.png) | ![Classic ribbon and folder layout](docs/images/theme-pc.png) |
 
 Light, Dark and Auto are independent of the layout. **Customize this palette** adds color pickers and RGB hex fields for accent, background, surfaces and text, with a preview. Save Changes applies the profile without a restart; Cancel discards edits. Custom colors use a fixed palette until switched off. Settings stay accessible in every layout.
 
@@ -155,4 +159,4 @@ This fork is based on [MonkeySaint/mailcraft](https://github.com/MonkeySaint/mai
 
 MIT OR Apache-2.0 ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)). Third-party notices and asset credits are preserved in [NOTICE](NOTICE) and [ATTRIBUTION.md](ATTRIBUTION.md).
 
-MailCraft Mac is independent and is not affiliated with or endorsed by Apple or Microsoft. Outlook is a Microsoft trademark, referenced only to describe compatibility goals.
+MailCraft is independent and is not affiliated with or endorsed by Apple or Microsoft.

@@ -1,7 +1,7 @@
-# Building and releasing MailCraft Mac
+# Building and releasing MailCraft
 
 The fork is [samcapshaw/amailcraft](https://github.com/samcapshaw/amailcraft). Inherited upstream tags
-and releases are not evidence of a published Mac edition. Signing and notarization have not been configured
+and releases do not represent builds of this fork. Signing and notarization have not been configured
 or verified for this fork.
 
 ## Local Mac development bundle
@@ -14,30 +14,33 @@ This builds `dist/MailCraft Mac.app` for the host architecture using the current
 icon, and bundle ID `dev.mailcraft.mac`. It is a development build without distribution signing or
 notarization. The default profile is `~/Library/Application Support/MailCraft Mac`.
 
-Before publishing, configure the fork's signing credentials, verify identifiers and update URLs,
-run the full quality gates, and test the resulting package. The local bundle helper does not produce
+Before publishing, run the full quality gates and verify the resulting packages. Certificate signing
+and notarization are optional for preview builds and must be described accurately in release notes. The local bundle helper does not produce
 a universal DMG or publish a GitHub release.
 
-## Inherited release pipeline
+## Desktop release pipeline
 
-The sections below describe the existing cross-platform packaging machinery. It still contains upstream
-application IDs, package names, and updater metadata; it must be adapted and tested before using it to
-distribute this fork. The README does not advertise upstream binaries as MailCraft Mac builds.
+The release workflow builds Windows x86_64 MSI/ZIP, a universal macOS DMG, and Linux x86_64/ARM64
+tar.gz/deb/rpm/AppImage packages. Installer and update links point to this fork. Linux uses
+`io.github.samcapshaw.amailcraft`; macOS retains `dev.mailcraft.mac` and its existing profile path.
+Windows uses a fork-specific upgrade identity and a MailCraft Desktop installation directory.
+Publication requires every requested platform to succeed. Web, FreeBSD and Windows ARM64 are
+not part of this desktop release workflow; separate tooling remains available.
 
 ## Cutting a release
 
 1. Make sure `master` is green: `cargo xtask ci`.
-2. Bump the version (root `Cargo.toml` `[workspace.package]` and the workspace entries in `Cargo.lock`):
+2. Write `docs/releases/VERSION.md` with features, downloads and known limitations. Bump the version (root `Cargo.toml` `[workspace.package]` and the workspace entries in `Cargo.lock`):
 
    ```sh
-   cargo xtask version bump 0.2.0
+   cargo xtask version bump 0.2.0-alpha.1
    ```
 
 3. Commit and tag. The tag must be `v` + the workspace version; the `version-check` job fails otherwise.
 
    ```sh
-   git commit -am "Release 0.2.0"
-   git tag -a v0.2.0 -m "MailCraft 0.2.0"
+   git commit -am "Release 0.2.0-alpha.1"
+   git tag -a v0.2.0-alpha.1 -m "MailCraft 0.2.0-alpha.1"
    ```
 
 4. Push the commit, then the tag to `origin` (`git@github.com:samcapshaw/amailcraft.git`; pushing is the
@@ -45,13 +48,12 @@ distribute this fork. The README does not advertise upstream binaries as MailCra
 
    ```sh
    git push origin master
-   git push origin v0.2.0
+   git push origin v0.2.0-alpha.1
    ```
 
 5. Watch the `release` workflow under the repository's
    [Actions tab](https://github.com/samcapshaw/amailcraft/actions). When it succeeds, the release appears
-   under [Releases](https://github.com/samcapshaw/amailcraft/releases) with the notes generated from the
-   commit subjects since the previous tag. Edit the notes there if needed. Re-running a failed `publish`
+   under [Releases](https://github.com/samcapshaw/amailcraft/releases) with the notes from the matching `docs/releases/VERSION.md` file. Edit the notes there if needed. Re-running a failed `publish`
    job replaces the files of a release that already exists.
 
 A version with a pre-release suffix (`0.2.0-rc.1`, tag `v0.2.0-rc.1`) is published as a pre-release. The
@@ -65,20 +67,13 @@ tags.
 
 | Job | Runner | Files |
 |---|---|---|
-| `version-check` | `ubuntu-latest` (`rust:1.99-bookworm` container) | (fails when the tag and `Cargo.toml` disagree) |
+| `version-check` | `ubuntu-latest` | Validates the tag against Cargo.toml and requires matching release notes |
 | `linux` (x86_64, aarch64) | `ubuntu-latest`, `ubuntu-24.04-arm` (`rust:1.99-bookworm` container) | `mailcraft-VERSION-linux-ARCH.tar.gz`, `mailcraft_VERSION-1_ARCH.deb`, `mailcraft-VERSION-1.ARCH.rpm`, `MailCraft-ARCH.AppImage` + `.zsync` |
-| `flatpak` | `ubuntu-latest` (privileged `debian:trixie` container) | `mailcraft-VERSION-x86_64.flatpak` |
-| `web` | `ubuntu-latest` (`rust:1.99-bookworm` container) | `mailcraft-VERSION-web.zip` |
 | `windows` | `windows-latest` | `mailcraft-VERSION-windows-x86_64.msi`, `mailcraft-VERSION-windows-x86_64.zip` |
 | `macos` | `macos-latest` | `MailCraft-VERSION-macos-universal.dmg` |
-| `freebsd` | `ubuntu-latest` (FreeBSD 14.3 VM, `vmactions/freebsd-vm`) | `mailcraft-VERSION-freebsd-ARCH.tar.gz`, `mailcraft-VERSION.pkg` |
 | `publish` | `ubuntu-latest` | the GitHub release, all of the above, `SHA256SUMS` |
 
-Every job runs by default. To leave a platform out, set the repository variable `RELEASE_WINDOWS`,
-`RELEASE_MACOS` or `RELEASE_FREEBSD` to `false` (Settings → Secrets and variables → Actions → Variables).
-Skipped platforms do not stop the release; failed ones do. The Rust version is the `rust:1.99-bookworm`
-image on Linux and `RUST_TOOLCHAIN` (installed with rustup) on Windows and macOS; change them together.
-FreeBSD uses the `rust` package of the VM's FreeBSD release.
+Every desktop platform is required. The Rust toolchain is pinned consistently for Linux, Windows and macOS.
 
 Two more workflows build single platforms on demand (Actions → Run workflow): `freebsd.yml` (tests and
 packages in the FreeBSD VM) and `windows-arm64.yml` (Windows on Arm, cross-compiled on `windows-latest` or
@@ -91,19 +86,19 @@ the wasm build) on every push to `master` and every pull request.
 Every package holds `mailcraft` (the desktop app) and `mailcraft-cli`, the licences (`LICENSE-MIT`,
 `LICENSE-APACHE`, `NOTICE`, `ATTRIBUTION.md` and the OFL texts of the fonts compiled into the binary) and,
 on Linux and FreeBSD, the desktop file, AppStream metadata and hicolor icons named after the application
-id `saint.dev.MailCraft`.
+id `io.github.samcapshaw.amailcraft`.
 
 - **tar.gz** (Linux, FreeBSD): `bin/` and `share/` under one folder, ready to unpack into a prefix:
   `tar -xzf mailcraft-….tar.gz -C ~/.local --strip-components=1`.
 - **deb / rpm** (built with [nfpm](https://nfpm.goreleaser.com), MIT): install into `/usr`; the post-install
   hook refreshes the desktop and icon caches.
 - **AppImage**: carries the update information
-  `gh-releases-zsync|MonkeySaint|mailcraft|latest|MailCraft-*ARCH.AppImage.zsync`, so AppImageUpdate
+  `gh-releases-zsync|samcapshaw|amailcraft|latest|MailCraft-*ARCH.AppImage.zsync`, so AppImageUpdate
   fetches the matching `.zsync` from the newest GitHub release; this is why the AppImage file name has no
   version in it.
 - **Flatpak**: a single-file bundle on the Freedesktop 25.08 runtime from Flathub, with network, Wayland
   (X11 fallback), GPU and portal file dialogs: `flatpak install --user mailcraft-….flatpak`.
-- **MSI**: per-machine install to `Program Files\MailCraft`, Start menu shortcut, `mailcraft-cli` on the
+- **MSI**: per-machine install to `Program Files\MailCraft Desktop`, Start menu shortcut, `mailcraft-cli` on the
   system `PATH`. Upgrades replace older versions (fixed UpgradeCode in `packaging/windows/mailcraft.wxs`).
 - **DMG**: `MailCraft.app`, a universal binary (Apple silicon and Intel), macOS 11 or later.
 - **web zip**: static files to serve from any web server, with a `_headers` file (content security policy,
@@ -137,7 +132,7 @@ signing secrets the Windows and macOS packages are built unsigned (ad-hoc signed
 | `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | secrets | Notarisation with `xcrun notarytool` (app-specific password) and stapling, after signing. |
 | `RELEASE_WINDOWS`, `RELEASE_MACOS`, `RELEASE_FREEBSD` | variables | `false` skips that platform's job. |
 
-The deb/rpm maintainer field defaults to `MonkeySaint <monkey@saint.dev>`; set `MAILCRAFT_MAINTAINER` in
+The deb/rpm maintainer field defaults to `MailCraft contributors <samcapshaw@users.noreply.github.com>`; set `MAILCRAFT_MAINTAINER` in
 the environment to change it.
 
 ## Building packages locally

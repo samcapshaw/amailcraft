@@ -183,6 +183,7 @@ pub struct Session {
     pub secrets: Box<dyn crate::accounts::SecretStore>,
     /// Send/receive workers, queued results and the status bar state (see `sync.rs`).
     pub sync: crate::sync::SyncState,
+    pub(crate) caldav: crate::cmd::caldav::State,
     /// Search index, recent searches and search toggles (see `search_index.rs`).
     pub search: crate::search_index::SearchState,
     /// Profile settings: File › Options and the option dialogs (see `settings.rs`). Saved with the view state
@@ -229,6 +230,7 @@ impl Session {
             automatic_depth: 0,
             secrets: Box::new(crate::accounts::MemorySecretStore::default()),
             sync: crate::sync::SyncState::default(),
+            caldav: crate::cmd::caldav::State::default(),
             search: crate::search_index::SearchState::default(),
             settings: Settings::default(),
             settings_dir: None,

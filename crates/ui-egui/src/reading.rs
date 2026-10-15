@@ -679,6 +679,23 @@ fn message_view(ui: &mut Ui, app: &mut App, id: u64, surface: Surface, narrow: b
                 {
                     ui.scroll_to_rect(r.expand(24.0), Some(Align::Center));
                 }
+                if app.mac_style {
+                    ui.add_space(24.0);
+                    for (index, (name, size)) in h.attachments.iter().enumerate() {
+                        attachment_chip(ui, app, id, index, name, size);
+                        ui.add_space(10.0);
+                    }
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui.add_sized([100.0, 36.0], egui::Button::new("↩ Reply")).clicked() {
+                            app.run("mail.reply", json!({"ids":[id],"window":in_window}));
+                        }
+                        if ui.add_sized([100.0, 36.0], egui::Button::new("Reply all").frame(false)).clicked()
+                        {
+                            app.run("mail.replyAll", json!({"ids":[id],"window":in_window}));
+                        }
+                    });
+                }
             });
         ui.add_space(PAD);
     });
@@ -727,10 +744,18 @@ fn header(ui: &mut Ui, app: &mut App, h: &ReadingHeader, id: u64, narrow: bool, 
         ui.horizontal(|ui| {
             let (icon, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
             app.icons.paint(ui, icon, if linked { "people" } else { "mail" }, theme.text_muted);
-            ui.label(RichText::new(context).size(12.0).color(theme.text_muted));
+            ui.label(RichText::new(context).font(theme.detail_font(12.0)).color(if theme.terminal_style {
+                theme.importance_low
+            } else {
+                theme.text_muted
+            }));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if !h.categories.is_empty() {
-                    ui.label(RichText::new(h.categories.join(" · ")).size(12.0).color(theme.text_muted));
+                    ui.label(
+                        RichText::new(h.categories.join(" · "))
+                            .font(theme.detail_font(12.0))
+                            .color(if theme.terminal_style { theme.draft } else { theme.text_muted }),
+                    );
                 }
             });
         });
@@ -800,17 +825,27 @@ fn header(ui: &mut Ui, app: &mut App, h: &ReadingHeader, id: u64, narrow: bool, 
         };
         let (r, _) = ui.allocate_exact_size(Vec2::splat(d), Sense::hover());
         let c = r.center();
-        ui.painter().circle_filled(
-            c,
-            d / 2.0,
-            if app.mac_style { theme.chrome } else { persona_color(h.persona_color) },
-        );
+        if theme.terminal_style {
+            ui.painter().rect_filled(r, 4.0, theme.chrome);
+        } else {
+            ui.painter().circle_filled(
+                c,
+                d / 2.0,
+                if app.mac_style { theme.chrome } else { persona_color(h.persona_color) },
+            );
+        }
         ui.painter().text(
             c,
             egui::Align2::CENTER_CENTER,
             &h.from_initials,
-            FontId::proportional(d * 0.36),
-            if app.mac_style { theme.text } else { Color32::WHITE },
+            theme.detail_font(d * 0.36),
+            if theme.terminal_style {
+                theme.draft
+            } else if app.mac_style {
+                theme.text
+            } else {
+                Color32::WHITE
+            },
         );
         ui.add_space(10.0);
         ui.vertical(|ui| {
@@ -852,7 +887,7 @@ fn header(ui: &mut Ui, app: &mut App, h: &ReadingHeader, id: u64, narrow: bool, 
         });
     }
     // 4. Attachments.
-    if !h.attachments.is_empty() {
+    if !app.mac_style && !h.attachments.is_empty() {
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             for (i, (name, size)) in h.attachments.iter().enumerate() {
@@ -998,18 +1033,41 @@ fn attachment_chip(ui: &mut Ui, app: &mut App, id: u64, index: usize, name: &str
     let mut action: Option<(&'static str, serde_json::Value)> = None;
     let inner = egui::Frame::new()
         .stroke(Stroke::new(1.0, theme.separator))
-        .corner_radius(4.0)
-        .fill(theme.pane)
-        .inner_margin(egui::Margin { left: 8, right: 2, top: 4, bottom: 4 })
+        .corner_radius(if app.mac_style && !theme.terminal_style { 9.0 } else { 4.0 })
+        .fill(if app.mac_style { theme.card_surface() } else { theme.pane })
+        .inner_margin(if app.mac_style {
+            egui::Margin::same(12)
+        } else {
+            egui::Margin { left: 8, right: 2, top: 4, bottom: 4 }
+        })
         .show(ui, |ui| {
+            if app.mac_style {
+                ui.set_width(ui.available_width());
+            }
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.spacing_mut().item_spacing.x = if app.mac_style { 12.0 } else { 6.0 };
                 let (r, _) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::hover());
-                app.icons.paint(ui, r, "attach", theme.accent);
+                app.icons.paint(
+                    ui,
+                    r,
+                    "attach",
+                    if theme.terminal_style { theme.flag } else { theme.text_muted },
+                );
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    ui.set_max_width(180.0);
-                    ui.add(egui::Label::new(RichText::new(name).size(12.0).color(theme.text)).truncate());
+                    ui.set_max_width(if app.mac_style {
+                        (ui.available_width() - 65.0).max(120.0)
+                    } else {
+                        180.0
+                    });
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(name)
+                                .size(if app.mac_style { 15.0 } else { 12.0 })
+                                .color(theme.text),
+                        )
+                        .truncate(),
+                    );
                     ui.label(RichText::new(size).size(11.0).color(theme.text_muted));
                 });
                 let menu = plain_icon_button(ui, app, "chevron-down", None, "Attachment options");

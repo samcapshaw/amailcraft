@@ -6,6 +6,7 @@
 //! returns [`NetError`] on failure; hostile server input never panics.
 
 pub mod autoconfig;
+pub mod caldav;
 pub mod discover;
 pub mod dns;
 pub mod error;

@@ -12,7 +12,7 @@
   <Package Name="MailCraft"
            Manufacturer="MailCraft contributors"
            Version="$(var.Version)"
-           UpgradeCode="67A0B8A2-55E8-4873-9223-ABACD1EE743F"
+           UpgradeCode="35BFC858-706D-4625-9484-A4E4CA6FFB53"
            Scope="perMachine"
            Compressed="yes"
            Language="1033">
@@ -24,11 +24,11 @@
          format from the extension; without one, Start menu shortcuts show a blank icon. -->
     <Icon Id="MailCraft.ico" SourceFile="$(var.RepoDir)\assets\app-icon\mailcraft.ico" />
     <Property Id="ARPPRODUCTICON" Value="MailCraft.ico" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/MonkeySaint/mailcraft" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/MonkeySaint/mailcraft/issues" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/samcapshaw/amailcraft" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/samcapshaw/amailcraft/issues" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="MailCraft">
+      <Directory Id="INSTALLFOLDER" Name="MailCraft Desktop">
         <Directory Id="LicencesFolder" Name="licences" />
       </Directory>
     </StandardDirectory>

@@ -150,7 +150,7 @@ use Effect::{Applied as A, Exposed as E, NotApplicable as N, Stored as S};
 use Kind::{Bool, Choice, Days, Int, List, Object, Text, Time, TimeRange};
 
 pub const INTERFACES: &[(&str, &str)] =
-    &[("outlook", "Outlook layout"), ("apple", "Apple"), ("omarchy", "Omarchy · Tokyo Night")];
+    &[("outlook", "PC"), ("apple", "Apple styled"), ("omarchy", "Omarchy · Tokyo Night")];
 
 /// Custom palette keys, shared by validation and the appearance editor.
 pub const PALETTE_KEYS: &[&str] =
@@ -354,6 +354,7 @@ pub const DEFS: &[Def] = &[
         S,
     ),
     d("general", "Appearance", "general.interface", "Layout", Choice("apple", INTERFACES), A),
+    d("general", "Appearance", "general.followOmarchy", "Follow Omarchy theme", Bool(false), A),
     d("general", "Appearance", "general.customColors", "Use custom colors", Bool(false), A),
     d("general", "Appearance", "general.accentColor", "Accent", Text("#7AA2F7", 7), A),
     d("general", "Appearance", "general.backgroundColor", "Background", Text("#1A1B26", 7), A),

@@ -7,13 +7,12 @@
   <project_license>@LICENSE@</project_license>
   <name>MailCraft</name>
   <summary>@SUMMARY@</summary>
-  <developer id="saint.dev">
+  <developer id="io.github.samcapshaw">
     <name>MailCraft contributors</name>
   </developer>
   <description>
     <p>
-      MailCraft is an open-source mail client written in Rust for people who like the classic desktop mail
-      layout: a module rail, a ribbon, the folder pane, a message list and a reading pane side by side.
+      MailCraft is an open-source mail client written in Rust for personal, shared and delegated mailboxes with Apple styled, PC and Omarchy interfaces.
       Mail, calendar, people, tasks and notes live in one window.
     </p>
     <p>Features:</p>
@@ -55,23 +54,19 @@
   <screenshots>
     <screenshot type="default">
       <caption>The main window: folders, message list and reading pane</caption>
-      <image type="source" width="1600" height="900">@RAW_URL@/docs/images/hero.png</image>
+      <image type="source" width="2880" height="1800">@RAW_URL@/docs/images/mac-inbox.png</image>
     </screenshot>
     <screenshot>
       <caption>Dark theme</caption>
-      <image type="source" width="1600" height="900">@RAW_URL@/docs/images/dark.png</image>
+      <image type="source" width="2880" height="1800">@RAW_URL@/docs/images/mac-dark.png</image>
     </screenshot>
     <screenshot>
-      <caption>Classic ribbon</caption>
-      <image type="source" width="1600" height="900">@RAW_URL@/docs/images/classic-ribbon.png</image>
+      <caption>PC layout</caption>
+      <image type="source" width="2880" height="1800">@RAW_URL@/docs/images/theme-pc.png</image>
     </screenshot>
     <screenshot>
       <caption>Calendar month view</caption>
-      <image type="source" width="1600" height="900">@RAW_URL@/docs/images/calendar.png</image>
-    </screenshot>
-    <screenshot>
-      <caption>A narrow window shows one pane at a time</caption>
-      <image type="source" width="700" height="700">@RAW_URL@/docs/images/narrow.png</image>
+      <image type="source" width="2880" height="2000">@RAW_URL@/docs/images/mac-calendar.png</image>
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1"/>
