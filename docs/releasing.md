@@ -60,8 +60,10 @@ A version with a pre-release suffix (`0.2.0-rc.1`, tag `v0.2.0-rc.1`) is publish
 MSI cannot carry the suffix, so it installs as `0.2.0`.
 
 To try the whole pipeline without publishing, run the `release` workflow by hand (Actions → release →
-Run workflow). It builds every package and keeps them as run artifacts; the `publish` job only runs for
-tags.
+Run workflow). Leave `release_tag` empty to build artifacts without publishing. To retry publishing an
+existing tag with an updated workflow, run the workflow from master and explicitly set `release_tag`
+to that tag. Every build checks out that immutable tag; changing the workflow does not change the
+application source associated with the release.
 
 ## What each job produces
 
