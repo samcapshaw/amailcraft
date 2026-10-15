@@ -1,4 +1,4 @@
-//! Read-only CalDAV discovery (RFC 4791 and RFC 5397). Credentials never cross origins.
+//! Read-only CalDAV discovery and event reports (RFC 4791/5397). Credentials never cross origins.
 use crate::{
     NetError, Result,
     autoconfig::{Element, parse_xml},
@@ -173,6 +173,84 @@ fn discover_inner(endpoint: &str, username: &str, password: &str, fixture: bool)
     Ok(calendars)
 }
 
+/// Downloads a bounded, server-expanded read-only event window (RFC 4791 §9.7).
+/// No redirects or resource follow-up requests are made.
+pub fn events(endpoint: &str, username: &str, password: &str, start: &str, end: &str) -> Result<Vec<u8>> {
+    validate(endpoint, username, password)?;
+    events_inner(endpoint, username, password, start, end, false)
+}
+fn events_inner(
+    endpoint: &str,
+    username: &str,
+    password: &str,
+    start: &str,
+    end: &str,
+    fixture: bool,
+) -> Result<Vec<u8>> {
+    let stamp = |s: &str| {
+        s.len() == 16
+            && s.bytes().enumerate().all(|(i, c)| match i {
+                8 => c == b'T',
+                15 => c == b'Z',
+                _ => c.is_ascii_digit(),
+            })
+    };
+    if !stamp(start) || !stamp(end) || start >= end {
+        return Err(invalid("Invalid CalDAV event window."));
+    }
+    let base = endpoint_url(endpoint, fixture)?;
+    let client = HttpClient {
+        max_body: 1024 * 1024,
+        max_redirects: 0,
+        options: crate::ConnectOptions {
+            allow_plaintext_auth: fixture,
+            connect_timeout: Duration::from_secs(10),
+            io_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let auth = format!("Basic {}", STANDARD.encode(format!("{username}:{password}")));
+    let body = format!(
+        r#"<?xml version="1.0"?><c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-data><c:expand start="{start}" end="{end}"/></c:calendar-data></d:prop><c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"><c:time-range start="{start}" end="{end}"/></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"#
+    );
+    let r = client.request(
+        "REPORT",
+        &base.to_string(),
+        &[("Authorization", &auth), ("Depth", "1"), ("Content-Type", "application/xml; charset=utf-8")],
+        Some(body.as_bytes()),
+    )?;
+    if r.status != 207 {
+        return Err(invalid(&format!("CalDAV refresh returned HTTP {}. Cached events were kept.", r.status)));
+    }
+    let root =
+        parse_xml(std::str::from_utf8(&r.body).map_err(|_| invalid("CalDAV returned non-UTF-8 XML."))?)?;
+    if root.name != "multistatus" {
+        return Err(invalid("Invalid CalDAV event response."));
+    }
+    let mut data = String::new();
+    for (i, response) in root.all("response").enumerate() {
+        if i >= 2000 {
+            return Err(invalid("Too many CalDAV resources; cached events were kept."));
+        }
+        let address =
+            response.child_text("href").ok_or_else(|| invalid("Missing CalDAV resource address."))?;
+        href(&base, address, fixture)?;
+        let calendar = successful_props(response)
+            .find_map(|p| p.child("calendar-data"))
+            .ok_or_else(|| invalid("A calendar resource could not be read; cached events were kept."))?;
+        if !calendar.text.contains("BEGIN:VCALENDAR") || !calendar.text.contains("END:VCALENDAR") {
+            return Err(invalid("Invalid calendar resource; cached events were kept."));
+        }
+        data.push_str(&calendar.text);
+        data.push_str("\r\n");
+    }
+    if data.is_empty() {
+        data.push_str("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n");
+    }
+    Ok(data.into_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +259,44 @@ mod tests {
         format!(
             r#"<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:response><d:href>{path}</d:href><d:propstat><d:prop>{props}</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>"#
         )
+    }
+    #[test]
+    fn report_requests_expanded_window_and_reads_escaped_calendar_data() {
+        let (url, thread, requests) = serve(1, |r| {
+            assert_eq!(r.method, "REPORT");
+            let body = std::str::from_utf8(&r.body).unwrap();
+            assert!(body.contains("<c:expand start=\"20261001T000000Z\" end=\"20271001T000000Z\"/>"));
+            assert!(body.contains("<c:time-range"));
+            assert_eq!(r.header("Depth"), Some("1"));
+            json(
+                207,
+                &multi(
+                    "<c:calendar-data>BEGIN:VCALENDAR&#13;&#10;VERSION:2.0&#13;&#10;END:VCALENDAR&#13;&#10;</c:calendar-data>",
+                    "/calendar/event.ics",
+                ),
+            )
+        });
+        let data = events_inner(
+            &url,
+            "person@example.net",
+            "synthetic",
+            "20261001T000000Z",
+            "20271001T000000Z",
+            true,
+        )
+        .unwrap();
+        thread.join().unwrap();
+        assert!(String::from_utf8(data).unwrap().contains("BEGIN:VCALENDAR\r\n"));
+        assert_eq!(requests.try_iter().count(), 1);
+    }
+    #[test]
+    fn report_rejects_failed_resources_and_cross_origin_hrefs() {
+        for body in [multi("<c:calendar-data>BEGIN:VCALENDAR END:VCALENDAR</c:calendar-data>","https://other.example.net/event.ics"),
+            "<multistatus><response><href>/event.ics</href><propstat><prop/><status>HTTP/1.1 403 Forbidden</status></propstat></response></multistatus>".into()] {
+            let (url,thread,_)=serve(1,move |_|json(207,&body));
+            assert!(events_inner(&url,"person@example.net","synthetic","20261001T000000Z","20271001T000000Z",true).is_err());
+            thread.join().unwrap();
+        }
     }
     #[test]
     fn discovers_principal_home_and_calendar_with_only_propfind() {

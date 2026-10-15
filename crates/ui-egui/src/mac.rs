@@ -141,7 +141,7 @@ pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
                     ui.close();
                 }
             }
-            more_item(ui, app, "calendar", "Find CalDAV calendars…", "", "caldav.discover", json!({}));
+            more_item(ui, app, "calendar", "CalDAV calendars…", "", "caldav.discover", json!({}));
             if ui.button("Accounts…").clicked() {
                 app.run("file.accountSettings", json!({}));
                 ui.close();

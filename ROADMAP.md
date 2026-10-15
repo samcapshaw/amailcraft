@@ -11,7 +11,7 @@ The goal is a refined mail experience with Apple styled, PC, and Omarchy interfa
 | Mac shell | Compact toolbar and search, neutral icons, light/dark appearances, system font loading on macOS |
 | Unified mailboxes | Combined Inbox and Sent folders, scoped search, source-aware message actions |
 | Graph mail | Initial OAuth Graph transport, folder discovery, delta/MIME sync, read/flag/move/delete and sending; local fixture validation |
-| CalDAV discovery | Read-only endpoint/principal/home lookup and calendar listing, transient credentials; no event sync or saved CalDAV accounts yet |
+| CalDAV calendars | Read-only discovery, saved sources, credential recovery, disconnect controls and scheduled background refresh into offline snapshots; bounded event window, no server writes |
 | Connected organizer | Opt-in Graph calendars (90 days back, one year ahead) and default contacts; offline snapshots, selected conditional edits, single timed appointment creation/deletion, attendee responses and persistent pending-change review |
 | Linked mailboxes | Shared/delegated labels, independent OAuth grants, receive-only default, explicit Send As opt-in |
 | Compose | Visible sender and signature selector, compact formatting row, optional Cc/Bcc, deeper tools in menus |

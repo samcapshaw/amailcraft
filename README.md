@@ -28,7 +28,9 @@ All Inboxes brings personal, shared, and delegated Inbox folders into one view. 
 
 ## A look inside
 
-**Latest update:** [Interface themes, refined desktop layouts, and connected Microsoft 365](docs/update-2026-10-14.md).
+**Latest update:** [Saved CalDAV calendars, offline access, automatic refresh, and connection recovery](docs/update-2026-10-15.md).
+
+The downloadable 0.2.0-alpha.1 preview predates these calendar updates; build the latest source to try them.
 
 | Light and dark | Settings and accounts |
 |---|---|
@@ -64,7 +66,7 @@ The underlying mail engine, CLI, and MCP integration come from upstream. This fo
 | Calendar and organizer | Persistent Calendar, Contacts, Tasks, and Notes navigation; local editing plus opt-in Microsoft 365 calendars/default contacts, single appointment creation/deletion, selected server-confirmed edits and attendee responses |
 | Other tools | Existing rules, quick steps, import/export, print/PDF, CLI, and MCP |
 
-CalDAV endpoint and calendar discovery is available as a read-only connection check; event sync is not yet implemented. See [CalDAV discovery](docs/caldav.md).
+CalDAV calendars can be discovered, saved and refreshed manually or automatically into read-only offline snapshots (90 days back, one year ahead). See [CalDAV calendars](docs/caldav.md) for provider and recurrence limits.
 
 See [Mac setup and limitations](docs/mac.md), [account documentation](docs/accounts.md), and the [fork roadmap](ROADMAP.md). The inherited [feature catalog](docs/parity.md) measures command coverage, not complete feature compatibility.
 

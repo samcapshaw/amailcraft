@@ -958,7 +958,7 @@ fn opt_name(p: &Value) -> Result<Option<String>, CmdError> {
 }
 
 /// Creates calendar folder `name` under `parent` (`name (2)`, `name (3)`… when taken).
-fn create_calendar(s: &mut Session, parent: FolderId, name: &str) -> Result<FolderId, CmdError> {
+pub(super) fn create_calendar(s: &mut Session, parent: FolderId, name: &str) -> Result<FolderId, CmdError> {
     let base: String = name.chars().filter(|c| !c.is_control()).take(200).collect();
     let base = if base.trim().is_empty() { "Calendar".to_owned() } else { base.trim().to_owned() };
     let mut last = None;
@@ -973,7 +973,7 @@ fn create_calendar(s: &mut Session, parent: FolderId, name: &str) -> Result<Fold
 }
 
 /// Where Add Calendar puts new calendars: `params.parent` when it is a calendar, else the default calendar.
-fn calendar_parent(s: &Session, p: &Value) -> Result<FolderId, CmdError> {
+pub(super) fn calendar_parent(s: &Session, p: &Value) -> Result<FolderId, CmdError> {
     if let Some(f) = opt_u64(p, "parent").map(FolderId) {
         return if pim::is_kind_folder(s, f, Kind::Appointment) {
             Ok(f)

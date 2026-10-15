@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run -p mailcraft-ui-egui --example ui_shot -- <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME]
-//!     [--reading right|bottom|off] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response|create|delete] [--graph-pending] [--scale F]
+//!     [--reading right|bottom|off] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response|create|delete] [--graph-pending] [--caldav-preview] [--scale F]
 //! ```
 //!
 //! Defaults: 1920x1040, light theme, Mail module, nothing selected, scale 1. `--module` takes mail, calendar,
@@ -44,6 +44,7 @@ struct Opts {
     connected_preview: bool,
     graph_edit: Option<String>,
     graph_pending: bool,
+    caldav_preview: bool,
     unified_sent: bool,
     module: Option<String>,
     reading: Option<String>,
@@ -76,6 +77,7 @@ fn parse() -> Result<Opts, String> {
         connected_preview: false,
         graph_edit: None,
         graph_pending: false,
+        caldav_preview: false,
         unified_sent: false,
         module: None,
         reading: None,
@@ -140,6 +142,10 @@ fn parse() -> Result<Opts, String> {
                 o.settings = true;
                 o.mac = true;
             }
+            "--caldav-preview" => {
+                o.caldav_preview = true;
+                o.mac = true;
+            }
             "--dialog" => {
                 o.dialog = Some(args.next().ok_or("--dialog needs a command id")?);
                 o.mac = true;
@@ -181,7 +187,7 @@ fn parse() -> Result<Opts, String> {
         }
     }
     if o.out.is_empty() {
-        return Err("usage: ui_shot <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME] [--reading POS] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response|create|delete] [--graph-pending] [--scale F]".into());
+        return Err("usage: ui_shot <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME] [--reading POS] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response|create|delete] [--graph-pending] [--caldav-preview] [--scale F]".into());
     }
     Ok(o)
 }
@@ -386,6 +392,22 @@ fn shoot(o: &Opts) -> Result<(), String> {
             }
         }
     }
+    if o.caldav_preview {
+        app.s.view.work_offline = true;
+        let v=app.s.run("caldav.add",&json!({"url":"https://calendar.example.net/design/","username":"jordan@example.net","password":"synthetic-preview","name":"Design team"})).map_err(|e|e.to_string())?;
+        let folder = mailcraft_model::FolderId(
+            v.get("folder").and_then(serde_json::Value::as_u64).ok_or("missing preview folder")?,
+        );
+        let now = app.s.now().unix;
+        mailcraft_engine::cmd::calendar::props::update(&mut app.s.mailbox, folder, |p| {
+            p.caldav_auto = true;
+            if let Some(sub) = p.subscription.as_mut() {
+                sub.last_update = Some(now);
+                sub.last_fetch = Some(now);
+            }
+        });
+        app.s.run("caldav.discover", &json!({})).map_err(|e| e.to_string())?;
+    }
     let mut fonts_done = false;
     let mut harness = Harness::builder()
         .with_size(egui::vec2(o.w, o.h))
@@ -407,6 +429,10 @@ fn shoot(o: &Opts) -> Result<(), String> {
     harness.run_steps(6);
     if o.more_menu {
         harness.get_by_label("More").click();
+        harness.run_steps(3);
+    }
+    if o.caldav_preview {
+        harness.get_by_label("Manage").click();
         harness.run_steps(3);
     }
     let image = harness.render()?;

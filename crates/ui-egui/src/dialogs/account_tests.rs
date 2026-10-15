@@ -1001,3 +1001,35 @@ fn caldav_discovery_starts_with_a_disabled_action_and_closes_without_account_cha
     step(&mut h);
     assert!(!names(&h).iter().any(|n| n == "caldavDiscovery"));
 }
+
+#[test]
+fn caldav_saved_sources_show_read_only_status_without_connecting() {
+    let mut app = sample_app();
+    app.s.run("caldav.add",&json!({"url":"https://calendar.example.net/team/","username":"person@example.net","password":"synthetic","name":"Team calendar"})).unwrap();
+    app.s.run("caldav.discover", &json!({})).unwrap();
+    let h = harness(app);
+    h.get_by_label("Team calendar");
+    h.get_by_label("Refresh");
+    h.get_by_label("Read-only · Not downloaded yet");
+    assert!(!serde_json::to_string(&h.state().s.mailbox).unwrap().contains("synthetic"));
+}
+
+#[test]
+fn caldav_management_disconnect_keeps_calendar_and_removes_secret() {
+    let mut app = sample_app();
+    let result=app.s.run("caldav.add",&json!({"url":"https://calendar.example.net/team/","username":"person@example.net","password":"unique-fixture-password","name":"Team calendar"})).unwrap();
+    let folder = mailcraft_model::FolderId(result["folder"].as_u64().unwrap());
+    app.s.run("caldav.discover", &json!({})).unwrap();
+    let mut h = harness(app);
+    h.get_by_label("Manage").click();
+    step(&mut h);
+    h.get_by_label("Refresh automatically");
+    h.get_by_label("New app password");
+    h.get_by_label("Disconnect…").click();
+    step(&mut h);
+    h.get_by_label("Disconnect and keep events").click();
+    step(&mut h);
+    assert!(h.state().s.mailbox.folder(folder).is_some());
+    assert!(h.state().s.secrets.keys().is_empty());
+    assert!(!mailcraft_engine::cmd::calendar::props::is_read_only(&h.state().s.mailbox, folder));
+}

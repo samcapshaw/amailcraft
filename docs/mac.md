@@ -136,7 +136,7 @@ This implementation uses the public [Omarchy palette format](https://github.com/
 
 ### Other calendar providers
 
-**More → View & connection → Find CalDAV calendars…** checks an HTTPS CalDAV endpoint and lists its calendars. This is a discovery tool, with transient credentials; it does not yet add or sync those calendars. See [CalDAV discovery](caldav.md).
+**More → View & connection → CalDAV calendars…** discovers and saves HTTPS CalDAV calendars, with credential recovery, automatic refresh and read-only offline events. See [CalDAV calendars](caldav.md) for the download window, credential storage and compatibility limits.
 
 Account setup uses the same grouped forms as Settings: provider choice cards, larger identity fields,
 separate incoming/outgoing server sections and aligned service switches. Shared/delegated setup is

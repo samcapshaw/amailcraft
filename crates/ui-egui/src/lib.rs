@@ -302,6 +302,12 @@ impl App {
     /// `Session::poll_sync`; a busy worker repaints often, and with server accounts the automatic
     /// send/receive timer and queued server changes are checked every few seconds.
     pub fn poll_sync(&mut self, ctx: &egui::Context) {
+        if mailcraft_engine::cmd::caldav::poll_background(&mut self.s) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+        if mailcraft_engine::cmd::caldav::scheduled(&self.s) {
+            ctx.request_repaint_after(std::time::Duration::from_secs(30));
+        }
         if self.s.poll_sync() {
             ctx.request_repaint();
         }

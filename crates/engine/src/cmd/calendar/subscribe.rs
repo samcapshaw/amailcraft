@@ -119,7 +119,9 @@ pub fn apply(s: &mut Session, folder: FolderId, outcome: Result<Fetched, String>
         Ok(Fetched::Data { body, etag, last_modified }) => match replace_items(s, folder, &body, false) {
             Ok(n) => {
                 let (_, refresh) = calendar_meta(&body);
-                if let Some(r) = refresh {
+                if let Some(r) = refresh
+                    && props::read(&s.mailbox, folder).caldav_username.is_none()
+                {
                     sub.refresh_min = r;
                 }
                 sub.etag = etag.filter(|e| e.len() <= 1024);
@@ -157,7 +159,7 @@ pub fn apply_background(
     folder: FolderId,
     outcome: Result<Fetched, String>,
 ) -> serde_json::Value {
-    if subscription(s, folder).is_none() {
+    if subscription(s, folder).is_none() && props::read(&s.mailbox, folder).caldav_username.is_none() {
         return serde_json::json!({ "folder": folder.0, "error": "not an internet calendar" });
     }
     let before = s.mailbox.clone();
@@ -181,13 +183,15 @@ pub fn apply_background(
 /// what its last refresh brought (its items and download state are the publisher's, not an editing step);
 /// its other properties (colour, saved view) come back with the snapshot.
 pub(crate) fn carry_over(live: &mbx::Mailbox, restored: &mut mbx::Mailbox) {
+    crate::cmd::caldav::carry_over(live, restored);
     let shared: Vec<(FolderId, Subscription)> = restored
         .folders
         .keys()
         .filter_map(|&f| {
             let mine = props::read(restored, f).subscription?;
             let theirs = props::read(live, f).subscription?;
-            (mine.url == theirs.url && mine != theirs).then_some((f, theirs))
+            (mine.url == theirs.url && (mine != theirs || props::read(live, f).caldav_username.is_some()))
+                .then_some((f, theirs))
         })
         .collect();
     for (f, sub) in shared {
@@ -229,6 +233,9 @@ pub fn subscriptions(s: &Session, all: bool) -> Vec<Due> {
         .values()
         .filter_map(|f| {
             let p = props::read(&s.mailbox, f.id);
+            if p.caldav_username.is_some() {
+                return None;
+            }
             let sub = p.subscription.filter(|x| !x.url.is_empty())?;
             let every = i64::from(sub.refresh_min.max(props::MIN_REFRESH_MIN)).saturating_mul(60);
             let due = all || sub.last_fetch.is_none_or(|t| now.saturating_sub(t) >= every || t > now);
@@ -239,7 +246,11 @@ pub fn subscriptions(s: &Session, all: bool) -> Vec<Due> {
 
 /// The subscription of `folder`, if it is one.
 pub fn subscription(s: &Session, folder: FolderId) -> Option<Due> {
-    props::read(&s.mailbox, folder).subscription.filter(|x| !x.url.is_empty()).map(|x| due_of(folder, &x))
+    let p = props::read(&s.mailbox, folder);
+    if p.caldav_username.is_some() {
+        return None;
+    }
+    p.subscription.filter(|x| !x.url.is_empty()).map(|x| due_of(folder, &x))
 }
 
 /// Fetches an internet calendar (blocking; call off the UI thread). Errors are user-facing text.

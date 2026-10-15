@@ -1103,6 +1103,7 @@ fn properties(s: &mut Session, p: &Value) -> CmdResult {
                     mailcraft_model::calendar::CalendarSource::Internet => "internet",
                     mailcraft_model::calendar::CalendarSource::File => "file",
                     mailcraft_model::calendar::CalendarSource::Microsoft365 => "Microsoft 365",
+                    mailcraft_model::calendar::CalendarSource::CalDav => "CalDAV",
                 };
                 o.insert(
                     "calendar".into(),

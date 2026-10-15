@@ -304,6 +304,8 @@ pub enum CalendarSource {
     File,
     /// Connected Microsoft 365 calendar snapshot.
     Microsoft365,
+    /// Read-only CalDAV calendar snapshot.
+    CalDav,
 }
 
 /// An internet calendar subscription (Add Calendar › From Internet).
@@ -350,6 +352,13 @@ pub struct CalendarProps {
     pub read_only: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscription: Option<Subscription>,
+    /// CalDAV login name; password lives only in the secret store.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caldav_username: Option<String>,
+    /// Opt-in automatic refresh while the desktop app is running.
+    pub caldav_auto: bool,
+    /// Invalidates downloads made before credential changes.
+    pub caldav_revision: u64,
     /// The folder's saved view (date fields cleared).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub view: Option<CalendarViewState>,
