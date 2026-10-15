@@ -202,7 +202,12 @@ jobs:
       - name: Collect the packages and write SHA256SUMS
         run: |
           mkdir -p dist/release
-          find dist/artifacts -type f -exec cp {} dist/release/ \;
+          # GitHub normalizes ~ to . in uploaded asset names. Normalize before hashing.
+          while IFS= read -r -d '' file; do
+            name="$(basename "$file")"
+            name="${name//\~/.}"
+            cp "$file" "dist/release/$name"
+          done < <(find dist/artifacts -type f -print0)
           cd dist/release
           sha256sum -- * >SHA256SUMS
           cat SHA256SUMS
