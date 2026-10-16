@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn show(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Option<Out> {
     Some(match d.name {
-        "graphCreateAppointment" => lifecycle::create(ctx, app, d),
+        "graphCreateAppointment" | "graphCreateMeeting" => lifecycle::create(ctx, app, d),
         "graphDeleteAppointment" => lifecycle::delete(ctx, app, d),
         "graphItem" => edit(ctx, app, d),
         "graphPending" => review(ctx, app, d),
@@ -247,10 +247,26 @@ fn proposal_text(value: &Value) -> String {
     if let Some(s) = value.get("dateTime").and_then(Value::as_str) {
         return format!("{s} UTC");
     }
+    if let Some(content) = value.get("content").and_then(Value::as_str) {
+        return content.into();
+    }
+    if let Some(flag) = value.as_bool() {
+        return if flag { "Yes" } else { "No" }.into();
+    }
     if let Some(addresses) = value.as_array() {
         return addresses
             .iter()
-            .filter_map(|v| v.get("address").and_then(Value::as_str))
+            .filter_map(|v| {
+                if let Some(email) = v.pointer("/emailAddress/address").and_then(Value::as_str) {
+                    Some(format!(
+                        "{} ({})",
+                        email,
+                        v.get("type").and_then(Value::as_str).unwrap_or("required")
+                    ))
+                } else {
+                    v.get("address").and_then(Value::as_str).map(str::to_owned)
+                }
+            })
             .collect::<Vec<_>>()
             .join(", ");
     }
@@ -307,6 +323,13 @@ fn review(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                                     op.mailbox,
                                     match op.action.as_str() {
                                         "patch" => "Edit",
+                                        "create"
+                                            if op
+                                                .payload
+                                                .get("attendees")
+                                                .and_then(Value::as_array)
+                                                .is_some_and(|v| !v.is_empty()) =>
+                                            "Meeting invitations",
                                         "create" => "New appointment",
                                         "delete" => "Delete appointment",
                                         _ => &op.action,
@@ -338,6 +361,8 @@ fn review(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                                                 "personalNotes" => "Notes",
                                                 "mobilePhone" => "Mobile",
                                                 "emailAddresses" => "Email",
+                                                "attendees" => "Attendees",
+                                                "responseRequested" => "Request responses",
                                                 "comment" => "Message",
                                                 _ => label(key),
                                             }
@@ -374,7 +399,7 @@ fn review(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                                 if ui
                                     .checkbox(
                                         &mut checked,
-                                        "I reviewed the current item and previous outcome in Outlook",
+                                        "I reviewed the current item and previous outcome on Microsoft 365",
                                     )
                                     .changed()
                                 {
@@ -409,4 +434,18 @@ fn review(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
             })
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn meeting_review_exposes_recipients_roles_and_notes() {
+        let value = json!([{"emailAddress":{"address":"maya@example.net"},"type":"required"},{"emailAddress":{"address":"alex@example.net"},"type":"optional"}]);
+        assert_eq!(proposal_text(&value), "maya@example.net (required), alex@example.net (optional)");
+        assert_eq!(
+            proposal_text(&json!({"contentType":"text","content":"Review layouts"})),
+            "Review layouts"
+        );
+    }
 }

@@ -166,6 +166,7 @@ pub fn search_highlight_on(s: &mailcraft_engine::Session) -> bool {
 pub const KNOWN: &[&str] = &[
     "caldavDiscovery",
     "graphCreateAppointment",
+    "graphCreateMeeting",
     "graphDeleteAppointment",
     "graphItem",
     "graphPending",

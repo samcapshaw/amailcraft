@@ -61,9 +61,9 @@ The underlying mail engine, CLI, and MCP integration come from upstream. This fo
 | Inbox | Combined Inbox and Sent folders, per-account folders, unread counts, Focused/Other, date grouping, sorting, filtering, and search |
 | Mail | Reading pane, replies, forwarding, drafts, archive, delete, move/copy, flags, categories, and conversations |
 | Compose | Visible From identity and signature picker, compact formatting, spelling, address completion, and attachments |
-| Accounts | Existing IMAP/SMTP, POP3, JMAP, OAuth flows, local storage, and background sync; shared/delegated OAuth IMAP setup and an initial Microsoft 365 Graph mail transport |
+| Accounts | Existing IMAP/SMTP, POP3, JMAP, OAuth flows, local storage, and background sync; shared/delegated OAuth IMAP setup and an initial Microsoft 365 Graph mail transport with resumable downloads |
 | Settings | Category navigation, grouped forms, appearance selection, Save/Cancel, and a separate account manager |
-| Calendar and organizer | Persistent Calendar, Contacts, Tasks, and Notes navigation; local editing plus opt-in Microsoft 365 calendars/default contacts, single appointment creation/deletion, selected server-confirmed edits and attendee responses |
+| Calendar and organizer | Persistent Calendar, Contacts, Tasks, and Notes navigation; local editing plus opt-in Microsoft 365 calendars/default contacts, single appointment creation/deletion and meeting invitations, selected server-confirmed edits and attendee responses |
 | Other tools | Existing rules, quick steps, import/export, print/PDF, CLI, and MCP |
 
 CalDAV calendars can be discovered, saved and refreshed manually or automatically into read-only offline snapshots (90 days back, one year ahead). See [CalDAV calendars](docs/caldav.md) for provider and recurrence limits.

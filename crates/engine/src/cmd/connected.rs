@@ -28,14 +28,15 @@ pub struct PendingWrite {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    [("graph.createAppointment","New Microsoft 365 appointment",r#"{"folder":number,"fields"?:{"subject":string,"location"?:string,"start":string,"end":string,"notes"?:string}}"#),
+    [("graph.createMeeting","New Microsoft 365 meeting",r#"{"folder":number,"confirm":true,"fields"?:{"subject":string,"start":string,"end":string,"location"?:string,"notes"?:string,"attendees":[{"email":string,"type":"required"|"optional"}]}} (no fields opens form; creation sends invitations)"#),
+     ("graph.createAppointment","New Microsoft 365 appointment",r#"{"folder":number,"fields"?:{"subject":string,"location"?:string,"start":string,"end":string,"notes"?:string}}"#),
      ("graph.deleteAppointment","Delete Microsoft 365 appointment",r#"{"id":number,"confirm"?:true,"version"?:string}"#),
      ("graph.edit","Edit on Microsoft 365",r#"{"id": number, "fields"?: object} (no fields opens editor; existing event: subject/location/start/end; contact: firstName/lastName/company/jobTitle/email/mobile/notes)"#),
      ("graph.respond","Respond to Microsoft 365 meeting",r#"{"id": number, "response": "accept"|"tentativelyAccept"|"decline", "comment"?: string}"#),
      ("graph.pending","Microsoft 365 pending changes",r#"{} (opens review dialog); {"list":true} returns pending writes"#),
      ("graph.retry","Retry Microsoft 365 change",r#"{"write":number,"reviewed"?:true} (review required for held operations; queued proposals keep their original version)"#),
      ("graph.discard","Discard Microsoft 365 change",r#"{"write":number} (queued/failed/uncertain only)"#)]
-    .into_iter().map(|(id,label,params)|CommandSpec {id,label,location:"Microsoft 365 › Connected items",shortcut:"",params,mutates:false,enabled:always,run:match id {"graph.createAppointment"=>lifecycle::create,"graph.deleteAppointment"=>lifecycle::delete,"graph.edit"=>edit,"graph.respond"=>respond,"graph.pending"=>pending_cmd,"graph.retry"=>retry,_=>discard}}).collect()
+    .into_iter().map(|(id,label,params)|CommandSpec {id,label,location:"Microsoft 365 › Connected items",shortcut:"",params,mutates:false,enabled:always,run:match id {"graph.createMeeting"=>lifecycle::create_meeting,"graph.createAppointment"=>lifecycle::create,"graph.deleteAppointment"=>lifecycle::delete,"graph.edit"=>edit,"graph.respond"=>respond,"graph.pending"=>pending_cmd,"graph.retry"=>retry,_=>discard}}).collect()
 }
 fn item(s: &Session, id: ItemId) -> Result<(AccountId, String, FolderKind, GraphItemMeta), CmdError> {
     let folder = s
@@ -548,6 +549,49 @@ mod tests {
             "changed@example.net".into();
         assert!(!write_allowed(&s, &pending(&s)[0]));
         assert!(s.run("graph.retry", &json!({"write":op.id})).is_err());
+    }
+
+    #[test]
+    fn meeting_invitations_are_durable_and_keep_recipients_on_reviewed_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::open(dir.path()).unwrap();
+        let (account, _, folder) = fixture(&mut s, true);
+        let start = DateTime::from_unix(s.now().unix + 3600, 0).to_rfc3339();
+        let end = DateTime::from_unix(s.now().unix + 7200, 0).to_rfc3339();
+        let fields = json!({"subject":"Design review","start":start,"end":end,"attendees":[{"email":"maya@example.net","type":"required"},{"email":"alex@example.net","type":"optional"}]});
+        assert!(s.run("graph.createMeeting", &json!({"folder":folder.0,"fields":fields})).is_err());
+        let cached = s.mailbox.appointments.clone();
+        s.run("graph.createMeeting", &json!({"folder":folder.0,"fields":fields,"confirm":true})).unwrap();
+        assert_eq!(s.mailbox.appointments, cached);
+        let op = pending(&s)[0].clone();
+        assert_eq!(op.payload["attendees"][1]["type"], "optional");
+        assert_eq!(op.payload["attendees"][0]["emailAddress"]["address"], "maya@example.net");
+        assert!(write_allowed(&s, &op));
+        claim(&mut s, account, std::slice::from_ref(&op)).unwrap();
+        drop(s);
+        let mut s = Session::open(dir.path()).unwrap();
+        s.view.work_offline = true;
+        assert_eq!(pending(&s)[0].status, "uncertain");
+        assert!(s.run("graph.retry", &json!({"write":op.id})).is_err());
+        s.run("graph.retry", &json!({"write":op.id,"reviewed":true})).unwrap();
+        assert_eq!(pending(&s)[0].payload, op.payload);
+    }
+    #[test]
+    fn meeting_creation_rejects_bad_duplicate_and_unsupported_attendees() {
+        let mut s = crate::sample::sample_session();
+        let (_, _, folder) = fixture(&mut s, true);
+        let start = DateTime::from_unix(s.now().unix + 3600, 0).to_rfc3339();
+        let end = DateTime::from_unix(s.now().unix + 7200, 0).to_rfc3339();
+        for attendees in [
+            json!([]),
+            json!([{"email":"bad\r\nBcc: hidden@example.net"}]),
+            json!([{"email":"maya@example.net","type":"resource"}]),
+            json!([{"email":"maya@example.net"},{"email":"MAYA@example.net"}]),
+            json!(vec![json!({"email":"a@example.net"}); 101]),
+        ] {
+            assert!(s.run("graph.createMeeting",&json!({"folder":folder.0,"confirm":true,"fields":{"subject":"Review","start":start,"end":end,"attendees":attendees}})).is_err());
+        }
+        assert!(pending(&s).is_empty());
     }
     #[test]
     fn creation_rejects_meetings_missing_offsets_and_invalid_times() {

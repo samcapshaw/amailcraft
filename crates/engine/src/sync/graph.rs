@@ -21,6 +21,7 @@ pub(super) struct GraphJob {
     now: mailcraft_model::DateTime,
     pub(super) writes: Vec<crate::cmd::connected::PendingWrite>,
     cursors: BTreeMap<String, String>,
+    round: Option<crate::accounts::GraphRound>,
     shadow: BTreeMap<String, JmapShadow>,
     updates: Vec<(String, JmapShadow, JmapShadow)>,
     destroy: Vec<String>,
@@ -50,6 +51,7 @@ pub(super) fn build_job(s: &Session, a: &Account, plan: &Plan) -> Result<Option<
         contacts: crate::accounts::account_options(s, a.id).graph_contacts,
         now: s.now(),
         cursors: serde_json::from_str(&state.email_state).unwrap_or_default(),
+        round: state.graph_round,
         shadow: state.shadow,
         ..Default::default()
     };
@@ -227,91 +229,7 @@ pub(super) fn run(
         if !emit(JmapEvent::Mailboxes { list: normalized, state: String::new() }) {
             return Ok(());
         }
-        let mut cursors = job.cursors.clone();
-        let mut removed = BTreeSet::new();
-        let mut changed: BTreeMap<String, (String, Value)> = BTreeMap::new();
-        for folder in &folders {
-            if stopped() {
-                return Ok(());
-            }
-            let folder_id = text(folder, "id")?;
-            let cursor = cursors.get(folder_id).map(String::as_str);
-            let (page, reset) = match client.messages_delta(folder_id, cursor) {
-                Ok(page) => (page, cursor.is_none()),
-                Err(NetError::Http { status: 410, .. }) => (client.messages_delta(folder_id, None)?, true),
-                Err(error) => return Err(error),
-            };
-            let mut present = BTreeSet::new();
-            if changed.len().saturating_add(removed.len()).saturating_add(page.values.len()) > 100_000 {
-                return Err(NetError::TooLarge("Graph synchronization batch".into()));
-            }
-            for value in page.values {
-                let id = text(&value, "id")?.to_owned();
-                if value.get("@removed").is_some() {
-                    present.remove(&id);
-                    if changed.get(&id).is_some_and(|(source, _)| source == folder_id) {
-                        changed.remove(&id);
-                    }
-                    removed.insert(id);
-                    continue;
-                }
-                present.insert(id.clone());
-                changed.insert(id, (folder_id.to_owned(), value));
-            }
-            if reset {
-                removed.extend(
-                    job.shadow
-                        .iter()
-                        .filter(|(_, sh)| sh.mailbox == folder_id)
-                        .filter(|(id, _)| !present.contains(*id))
-                        .map(|(id, _)| id.clone()),
-                );
-            }
-            let delta = page
-                .delta
-                .ok_or_else(|| NetError::Protocol("Graph delta response has no continuation state".into()))?;
-            cursors.insert(folder_id.to_owned(), delta);
-        }
-        for (id, (folder, value)) in &changed {
-            if stopped() {
-                return Ok(());
-            }
-            let raw = if job.shadow.contains_key(id) { None } else { Some(client.mime(id)?) };
-            let mut keywords = Vec::new();
-            if value.get("isRead").and_then(Value::as_bool).unwrap_or(false) {
-                keywords.push("$seen".into());
-            }
-            if value.get("isDraft").and_then(Value::as_bool).unwrap_or(false) {
-                keywords.push("$draft".into());
-            }
-            if value.pointer("/flag/flagStatus").and_then(Value::as_str) == Some("flagged") {
-                keywords.push("$flagged".into());
-            }
-            if value.pointer("/flag/flagStatus").and_then(Value::as_str) == Some("complete") {
-                keywords.push("$complete".into());
-            }
-            keywords.sort();
-            if !emit(JmapEvent::Emails {
-                list: vec![JEmail {
-                    id: id.clone(),
-                    mailboxes: vec![folder.clone()],
-                    keywords,
-                    size: raw.as_ref().map(|b| b.len() as u64),
-                    raw,
-                }],
-            }) {
-                return Ok(());
-            }
-        }
-        let gone = removed.into_iter().filter(|id| !changed.contains_key(id)).collect();
-        if !emit(JmapEvent::Gone { ids: gone }) {
-            return Ok(());
-        }
-        let active: BTreeSet<_> =
-            folders.iter().filter_map(|f| f.get("id").and_then(Value::as_str)).collect();
-        cursors.retain(|id, _| active.contains(id.as_str()));
-        let state = serde_json::to_string(&cursors).map_err(|e| NetError::Protocol(e.to_string()))?;
-        emit(JmapEvent::EmailState { state });
+        download_mail(account, &client, job, &folders, &roles, events, cancel)?;
         fetch_services(account, &client, job, events, cancel)?;
         if let Some(error) = write_error {
             return Err(NetError::Refused(error));
@@ -320,6 +238,187 @@ pub(super) fn run(
     })();
     if stopped() { Some("Send/Receive was cancelled.".into()) } else { result.err().map(|e| e.to_string()) }
 }
+/// A page is applied and journaled as a unit before its progress is persisted.
+pub(super) struct Checkpoint {
+    pub(super) list: Vec<JEmail>,
+    pub(super) gone: Vec<String>,
+    pub(super) cursors: String,
+    pub(super) round: Option<crate::accounts::GraphRound>,
+}
+pub(super) fn apply_checkpoint(
+    s: &mut Session,
+    account: AccountId,
+    page: Checkpoint,
+    new_inbox: &mut Vec<mailcraft_model::ItemId>,
+) {
+    super::jmap::apply(s, account, JmapEvent::Emails { list: page.list }, new_inbox);
+    super::jmap::apply(s, account, JmapEvent::Gone { ids: page.gone }, new_inbox);
+    let state = s.sync.prefs.data.graph.entry(account.0).or_default();
+    state.email_state = page.cursors;
+    state.graph_round = page.round;
+}
+
+fn download_mail(
+    account: AccountId,
+    client: &mailcraft_net::graph::GraphClient,
+    job: &GraphJob,
+    folders: &[Value],
+    roles: &BTreeMap<String, String>,
+    events: &Events,
+    cancel: &AtomicBool,
+) -> Result<(), NetError> {
+    use std::collections::VecDeque;
+    let active: BTreeSet<String> =
+        folders.iter().map(|f| text(f, "id").map(str::to_owned)).collect::<Result<_, _>>()?;
+    let mut round = job
+        .round
+        .clone()
+        .unwrap_or_else(|| crate::accounts::GraphRound { pending: active.clone(), ..Default::default() });
+    round.pending.retain(|id| active.contains(id));
+    for id in &active {
+        if !round.started.contains(id) {
+            round.pending.insert(id.clone());
+        }
+    }
+    let mut cursors = job.cursors.clone();
+    cursors.retain(|id, _| active.contains(id));
+    let mut order: Vec<_> = round.pending.iter().cloned().collect();
+    order.sort_by_key(|id| (roles.get(id).is_none_or(|role| role != "inbox"), id.clone()));
+    let mut queue: VecDeque<_> = order.into();
+    let mut visited = BTreeSet::new();
+    let mut known: BTreeSet<_> = job.shadow.keys().cloned().collect();
+    let mut bytes = 0usize;
+    for _ in 0..100 {
+        if cancel.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let Some(folder) = queue.pop_front() else { break };
+        let cursor = cursors.get(&folder).cloned();
+        if !visited.insert((folder.clone(), cursor.clone())) {
+            return Err(NetError::Protocol("Graph repeated a message continuation".into()));
+        }
+        let (page, reset) = match client.messages_delta_page(&folder, cursor.as_deref()) {
+            Ok(page) => (page, cursor.is_none()),
+            Err(NetError::Http { status: 410, .. }) => (client.messages_delta_page(&folder, None)?, true),
+            Err(e) => return Err(e),
+        };
+        bytes = bytes.saturating_add(page.bytes_received);
+        if bytes > 64 * 1024 * 1024 || round.pages >= 10000 {
+            return Err(NetError::TooLarge("Graph download round".into()));
+        }
+        if reset {
+            round.stale.insert(
+                folder.clone(),
+                job.shadow.iter().filter(|(_, v)| v.mailbox == folder).map(|(id, _)| id.clone()).collect(),
+            );
+            round.locations.retain(|_, source| source != &folder);
+        }
+        let mut list = Vec::new();
+        for value in page.values {
+            if cancel.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            let id = text(&value, "id")?.to_owned();
+            if id.len() > 8192 {
+                return Err(NetError::TooLarge("Graph message identifier".into()));
+            }
+            if value.get("@removed").is_some() {
+                if round.locations.get(&id) == Some(&folder) {
+                    round.locations.remove(&id);
+                }
+                round.removed.insert(id);
+                continue;
+            }
+            for stale in round.stale.values_mut() {
+                stale.remove(&id);
+            }
+            round.locations.insert(id.clone(), folder.clone());
+            let raw = if known.contains(&id) { None } else { Some(client.mime(&id)?) };
+            bytes = bytes.saturating_add(raw.as_ref().map_or(0, Vec::len));
+            if bytes > 64 * 1024 * 1024 {
+                return Err(NetError::TooLarge("Graph download round".into()));
+            }
+            known.insert(id.clone());
+            let mut keywords = Vec::new();
+            if value.get("isRead").and_then(Value::as_bool) == Some(true) {
+                keywords.push("$seen".into());
+            }
+            if value.get("isDraft").and_then(Value::as_bool) == Some(true) {
+                keywords.push("$draft".into());
+            }
+            match value.pointer("/flag/flagStatus").and_then(Value::as_str) {
+                Some("flagged") => keywords.push("$flagged".into()),
+                Some("complete") => keywords.push("$complete".into()),
+                _ => {}
+            }
+            keywords.sort();
+            list.push(JEmail {
+                id,
+                mailboxes: vec![folder.clone()],
+                keywords,
+                size: raw.as_ref().map(|b| b.len() as u64),
+                raw,
+            });
+        }
+        if round
+            .locations
+            .len()
+            .saturating_add(round.removed.len())
+            .saturating_add(round.stale.values().map(BTreeSet::len).sum::<usize>())
+            > 200000
+        {
+            return Err(NetError::TooLarge("Graph download bookkeeping".into()));
+        }
+        round.pages = round.pages.saturating_add(1);
+        round.started.insert(folder.clone());
+        if serde_json::to_vec(&round).map_err(|e| NetError::Protocol(e.to_string()))?.len() > 16 * 1024 * 1024
+        {
+            return Err(NetError::TooLarge("Graph download bookkeeping".into()));
+        }
+        let more = page.next.is_some();
+        let link = page
+            .next
+            .or(page.delta)
+            .ok_or_else(|| NetError::Protocol("Missing Graph continuation".into()))?;
+        cursors.insert(folder.clone(), link);
+        if more {
+            queue.push_back(folder.clone());
+        } else {
+            round.pending.remove(&folder);
+        }
+        let done = round.pending.is_empty();
+        let gone = if done {
+            round
+                .removed
+                .iter()
+                .chain(round.stale.values().flatten())
+                .filter(|id| !round.locations.contains_key(*id))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let state = serde_json::to_string(&cursors).map_err(|e| NetError::Protocol(e.to_string()))?;
+        if !events.send(Event::GraphMailPage {
+            account,
+            page: Box::new(Checkpoint { list, gone, cursors: state, round: (!done).then(|| round.clone()) }),
+        }) {
+            return Ok(());
+        }
+        events.send(Event::Progress {
+            account,
+            text: format!("Microsoft 365 mail saved · {} folders remaining", round.pending.len()),
+        });
+    }
+    if !round.pending.is_empty() {
+        events.send(Event::Progress {
+            account,
+            text: "Mail progress saved; the next sync will continue the download".into(),
+        });
+    }
+    Ok(())
+}
+
 fn fetch_services(
     account: AccountId,
     client: &mailcraft_net::graph::GraphClient,
@@ -364,6 +463,79 @@ mod tests {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::time::Duration;
+
+    #[test]
+    fn interrupted_download_emits_a_durable_continuation_before_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let next = format!("{base}/v1.0/users/owner%40example.net/continue?opaque=fixture");
+        let link = next.clone();
+        let thread = std::thread::spawn(move || {
+            for n in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if n == 2 {
+                    assert!(line.contains("continue?opaque=fixture"));
+                }
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header == "\r\n" {
+                        break;
+                    }
+                }
+                let (status, body) = match n {
+                    0 => (200, json!({"value":[{"id":"new-id"}],"@odata.nextLink":link}).to_string()),
+                    1 => {
+                        (200, "From: sender@example.net\r\nSubject: Recent mail\r\n\r\nSynthetic body".into())
+                    }
+                    _ => (503, "{}".into()),
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let client = GraphConn::new(
+            &format!("{base}/v1.0"),
+            "owner@example.net",
+            "fixture",
+            mailcraft_net::ConnectOptions { allow_plaintext_auth: true, ..Default::default() },
+        )
+        .unwrap()
+        .connect()
+        .unwrap();
+        let (events, rx) = Events::test_pair();
+        assert!(
+            download_mail(
+                AccountId(1),
+                &client,
+                &GraphJob::default(),
+                &[json!({"id":"inbox"})],
+                &BTreeMap::new(),
+                &events,
+                &AtomicBool::new(false)
+            )
+            .is_err()
+        );
+        thread.join().unwrap();
+        let page = rx
+            .try_iter()
+            .find_map(|(_, e)| match e {
+                Event::GraphMailPage { page, .. } => Some(page),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(page.list.len(), 1);
+        assert_eq!(serde_json::from_str::<BTreeMap<String, String>>(&page.cursors).unwrap()["inbox"], next);
+        assert!(page.round.unwrap().pending.contains("inbox"));
+        assert!(page.gone.is_empty());
+    }
 
     fn fixture() -> (String, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

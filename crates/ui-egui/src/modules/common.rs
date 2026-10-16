@@ -892,6 +892,12 @@ pub(super) fn connected_strip(ui: &mut Ui, app: &mut App, folder: FolderId, rect
                 {
                     app.run("graph.createAppointment", serde_json::json!({"folder":folder.0}));
                 }
+                if kind == FolderKind::Calendar
+                    && mailcraft_engine::cmd::connected::can_create(&app.s, folder)
+                    && ui.small_button("New meeting…").clicked()
+                {
+                    app.run("graph.createMeeting", serde_json::json!({"folder":folder.0}));
+                }
                 let count = mailcraft_engine::cmd::connected::pending_count(&app.s, account);
                 if (options.graph_editing || count > 0)
                     && ui

@@ -1,7 +1,7 @@
 # Microsoft 365 mail, calendars and contacts
 
 This is the first Microsoft Graph mail transport in MailCraft. It runs in the existing background
-send/receive worker and works with the Apple, Outlook and Omarchy layouts. It has been verified with
+send/receive worker and works with the Apple styled, PC and Omarchy layouts. It has been verified with
 synthetic local HTTP fixtures, **not a live Microsoft 365 tenant**.
 
 ## Setup
@@ -73,7 +73,7 @@ Changes are saved to a separate persistent proposal queue before network work st
 
 Conditional updates reject stale versions. Meeting responses first check that the current server version matches the version shown when the sheet opened. Failed proposals remain available; retries require explicit review of the current item and previous outcome in Outlook. A lost connection, server failure or interrupted app run holds the operation for review instead of automatically replaying it. Discarding a proposal does not undo a change Microsoft already accepted.
 
-This is an initial write path: single timed appointment creation/deletion is now available through dedicated sheets; full recurrence editing, meeting cancellation, broader contact fields and organizer management remain future work. These writes have only been exercised against synthetic local fixtures, not a live tenant. Microsoft documents [event updates](https://learn.microsoft.com/en-us/graph/api/event-update?view=graph-rest-1.0), [contact updates](https://learn.microsoft.com/en-us/graph/api/contact-update?view=graph-rest-1.0) and [meeting responses](https://learn.microsoft.com/en-us/graph/api/event-accept?view=graph-rest-1.0).
+This is an initial write path: single timed appointment creation/deletion is now available through dedicated sheets; single timed meeting invitations are also available; full recurrence editing, meeting cancellation, broader contact fields and organizer management remain future work. These writes have only been exercised against synthetic local fixtures, not a live tenant. Microsoft documents [event updates](https://learn.microsoft.com/en-us/graph/api/event-update?view=graph-rest-1.0), [contact updates](https://learn.microsoft.com/en-us/graph/api/contact-update?view=graph-rest-1.0) and [meeting responses](https://learn.microsoft.com/en-us/graph/api/event-accept?view=graph-rest-1.0).
 
 Sheet previews: [event editor](images/microsoft365-edit-event.png), [contact editor](images/microsoft365-edit-contact.png), [meeting response](images/microsoft365-response.png), [pending proposals](images/microsoft365-pending.png). All use synthetic offline data.
 
@@ -99,6 +99,11 @@ and [delegated sending documentation](https://learn.microsoft.com/en-us/graph/ou
 - Folder discovery, including child folders, and binding of well-known Inbox/Sent/Drafts/Trash/Junk/Archive roles.
 - Per-folder incremental message sync, bounded pagination, persisted continuation state, and recovery from HTTP 410 expired state. New Graph accounts poll every two minutes by default; manual refresh is also available.
 - Full MIME downloads, using existing attachment, offline storage and rendering paths.
+- Resumable mail history downloads: newest messages first, rotating one page at a time between folders.
+  Each page saves its messages before its continuation cursor. Interrupted downloads continue from the
+  last saved page; replay does not duplicate messages. Deletions from a reset scan wait until the scan
+  finishes, and moves between folders are reconciled across pages. A local save failure pauses downloads
+  without advancing progress. Each sync processes up to 100 pages; subsequent syncs continue the scan.
 - Read/unread and follow-up flags; moves between synchronized folders in the same mailbox; message deletion.
 - MIME sending through Graph, including attachments and Bcc from the existing composer, up to a 3 MiB raw-message limit for this initial direct-send path.
 - A local Sent copy while Microsoft's asynchronous send is filed; later sync adopts the server copy by Message-ID.
@@ -141,3 +146,28 @@ Right-click an eligible connected appointment and choose **Delete on Microsoft 3
 Both actions use Pending changes and can be queued offline. A creation keeps its original transaction ID across reviewed retries to help prevent duplicate events. Unknown outcomes remain held for review. Creation also checks the server calendar's current editing permission. Cached data changes only through the subsequent successful refresh. Discarding a proposal cannot undo an accepted server operation.
 
 These flows are verified with synthetic local fixtures, not a live tenant. The implementation follows Microsoft's [event creation](https://learn.microsoft.com/en-us/graph/api/calendar-post-events?view=graph-rest-1.0) and [event deletion](https://learn.microsoft.com/en-us/graph/api/event-delete?view=graph-rest-1.0) APIs. No external application code was imported for this increment.
+
+## Create meeting invitations
+
+In a connected calendar with editing enabled, choose **New meeting** or **New meeting…** in its
+connection strip. Enter the subject, required and optional attendee email addresses, location and UTC
+times. Separate addresses with commas or semicolons. **Send invitations** creates the meeting on
+Microsoft 365 and sends invitations to the listed attendees; offline, **Queue invitations** saves the
+proposal for submission after reconnecting.
+
+This supports single timed meetings with 1–100 unique required/optional attendees. Resource attendees,
+recurrence, all-day meetings and online-meeting generation are not included. Source calendar and
+account permissions are checked locally and server edit permission is checked before creation.
+CalDAV calendars remain read-only.
+
+Meetings use the same durable creation queue as appointments. No local placeholder is shown as a
+confirmed server event. Pending changes shows attendee addresses and roles; an uncertain submission
+requires review before retrying, and the retry retains its original transaction ID and invitees. A
+transaction ID reduces duplicate creation risk but is not a guarantee of exactly-once email delivery.
+Do not submit a new proposal to recover an uncertain one; review the existing proposal and server calendar.
+
+The implementation follows the public [Microsoft Graph event-creation API](https://learn.microsoft.com/en-us/graph/api/calendar-post-events?view=graph-rest-1.0).
+Validation uses synthetic local fixtures; live tenant behavior remains unverified. Meeting cancellation
+and recurring-series management remain future work.
+
+Form previews: [Apple styled](images/microsoft365-create-meeting-apple.png) and [Omarchy](images/microsoft365-create-meeting-omarchy.png), rendered with synthetic offline data.

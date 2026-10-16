@@ -568,11 +568,24 @@ pub struct JmapShadow {
     pub keywords: Vec<String>,
 }
 
+/// A partly downloaded Graph round; deletions wait until every folder finishes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GraphRound {
+    pub pending: BTreeSet<String>,
+    pub started: BTreeSet<String>,
+    pub stale: BTreeMap<String, BTreeSet<String>>,
+    pub locations: BTreeMap<String, String>,
+    pub removed: BTreeSet<String>,
+    pub pages: u32,
+}
 /// JMAP bookkeeping of one account.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct JmapState {
     pub email_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_round: Option<GraphRound>,
     pub mailbox_state: String,
     pub shadow: BTreeMap<String, JmapShadow>,
 }

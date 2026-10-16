@@ -49,6 +49,12 @@ pub fn write_allowed(s: &Session, op: &PendingWrite) -> bool {
     }
 }
 pub(super) fn create(s: &mut Session, p: &Value) -> CmdResult {
+    create_event(s, p, false)
+}
+pub(super) fn create_meeting(s: &mut Session, p: &Value) -> CmdResult {
+    create_event(s, p, true)
+}
+fn create_event(s: &mut Session, p: &Value, meeting: bool) -> CmdResult {
     crate::accounts::load_prefs(s);
     let folder = FolderId(target(p, "folder")?);
     if !can_create(s, folder) {
@@ -57,20 +63,39 @@ pub(super) fn create(s: &mut Session, p: &Value) -> CmdResult {
         ));
     }
     if p.get("fields").is_none() {
-        s.notify(Notice::OpenDialog("graphCreateAppointment".into(), json!({"folder":folder.0})));
-        return Ok(json!({"dialog":"graphCreateAppointment"}));
+        s.notify(Notice::OpenDialog(
+            if meeting { "graphCreateMeeting" } else { "graphCreateAppointment" }.into(),
+            json!({"folder":folder.0}),
+        ));
+        return Ok(json!({"dialog":if meeting {"graphCreateMeeting"} else {"graphCreateAppointment"}}));
     }
     let fields = p
         .get("fields")
         .filter(|v| v.is_object())
         .ok_or_else(|| CmdError::Params("`fields` must be an object".into()))?;
     if fields.as_object().is_some_and(|m| {
-        m.keys().any(|k| !["subject", "location", "start", "end", "notes"].contains(&k.as_str()))
+        m.keys().any(|k| {
+            !["subject", "location", "start", "end", "notes"].contains(&k.as_str())
+                && !(meeting && k == "attendees")
+        })
     }) {
         return Err(CmdError::Params(
-            "Only a timed appointment without attendees or recurrence is supported here.".into(),
+            if meeting {
+                "Only a single timed meeting with required or optional attendees is supported here."
+            } else {
+                "Only a timed appointment without attendees or recurrence is supported here."
+            }
+            .into(),
         ));
     }
+    let attendees = if meeting {
+        if p.get("confirm").and_then(Value::as_bool) != Some(true) {
+            return Err(CmdError::Params("Confirm sending invitations before creating this meeting.".into()));
+        }
+        Some(meeting_attendees(fields)?)
+    } else {
+        None
+    };
     let subject = text(fields, "subject", 2048)?
         .filter(|v| !v.trim().is_empty())
         .ok_or_else(|| CmdError::Params("Enter a subject.".into()))?;
@@ -105,7 +130,14 @@ pub(super) fn create(s: &mut Session, p: &Value) -> CmdResult {
         (source.address.clone(), source.incoming.as_ref().map(|v| v.host.clone()).unwrap_or_default());
     let transaction = transaction_id()?;
     let time = |t: DateTime| json!({"dateTime":DateTime::from_unix(t.unix,0).to_rfc3339().trim_end_matches('Z'),"timeZone":"UTC"});
-    let payload = json!({"subject":subject,"location":{"displayName":text(fields,"location",2048)?.unwrap_or_default()},"body":{"contentType":"text","content":text(fields,"notes",16384)?.unwrap_or_default()},"start":time(start_time),"end":time(end_time),"transactionId":transaction});
+    let mut payload = json!({"subject":subject,"location":{"displayName":text(fields,"location",2048)?.unwrap_or_default()},"body":{"contentType":"text","content":text(fields,"notes",16384)?.unwrap_or_default()},"start":time(start_time),"end":time(end_time),"transactionId":transaction});
+    if let Some(attendees) = attendees {
+        let object = payload
+            .as_object_mut()
+            .ok_or_else(|| CmdError::Failed("Could not prepare meeting fields.".into()))?;
+        object.insert("attendees".into(), Value::Array(attendees));
+        object.insert("responseRequested".into(), Value::Bool(true));
+    }
     if serde_json::to_vec(&payload).map_err(|e| CmdError::Failed(e.to_string()))?.len() > 32 * 1024 {
         return Err(CmdError::Params("Appointment is too large.".into()));
     }
@@ -134,6 +166,54 @@ pub(super) fn create(s: &mut Session, p: &Value) -> CmdResult {
     start(s, account);
     Ok(json!({"queued":true,"write":write,"offline":s.view.work_offline}))
 }
+fn meeting_attendees(fields: &Value) -> Result<Vec<Value>, CmdError> {
+    let values = fields
+        .get("attendees")
+        .and_then(Value::as_array)
+        .filter(|v| !v.is_empty() && v.len() <= 100)
+        .ok_or_else(|| CmdError::Params("Add between 1 and 100 required or optional attendees.".into()))?;
+    let mut seen = std::collections::BTreeSet::new();
+    values
+        .iter()
+        .map(|v| {
+            let email = v.get("email").and_then(Value::as_str).unwrap_or_default().trim();
+            let role = v.get("type").and_then(Value::as_str).unwrap_or("required");
+            let valid = email.len() <= 254
+                && email.is_ascii()
+                && email.split_once('@').is_some_and(|(local, domain)| {
+                    !local.is_empty()
+                        && local.len() <= 64
+                        && !local.starts_with('.')
+                        && !local.ends_with('.')
+                        && !local.contains("..")
+                        && local
+                            .bytes()
+                            .all(|c| c.is_ascii_alphanumeric() || b".!#$%&'*+-/=?^_`{|}~".contains(&c))
+                        && domain.contains('.')
+                        && domain.split('.').all(|l| {
+                            !l.is_empty()
+                                && l.len() <= 63
+                                && !l.starts_with('-')
+                                && !l.ends_with('-')
+                                && l.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                        })
+                });
+            if !valid
+                || !["required", "optional"].contains(&role)
+                || v.as_object().is_none_or(|o| o.keys().any(|k| k != "email" && k != "type"))
+            {
+                return Err(CmdError::Params(
+                    "Use plain email addresses and required or optional attendee types.".into(),
+                ));
+            }
+            if !seen.insert(email.to_ascii_lowercase()) {
+                return Err(CmdError::Params("Each attendee should appear only once.".into()));
+            }
+            Ok(json!({"emailAddress":{"address":email},"type":role}))
+        })
+        .collect()
+}
+
 pub(super) fn delete(s: &mut Session, p: &Value) -> CmdResult {
     let id = ItemId(target(p, "id")?);
     if !can_delete(s, id) {

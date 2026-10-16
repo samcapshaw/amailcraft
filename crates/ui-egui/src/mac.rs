@@ -260,7 +260,12 @@ fn module_toolbar(ui: &mut Ui, app: &mut App, frame: &Frame) {
         && frame.width >= 700.0
         && widgets::icon_button(ui, app, "meeting", "New meeting", true).clicked()
     {
-        app.run("calendar.newMeeting", json!({"form":true}));
+        let folder = app.s.selection.folder;
+        if app.s.mailbox.folder(folder).is_some_and(|f| f.graph_source.is_some()) {
+            app.run("graph.createMeeting", json!({"folder":folder.0}));
+        } else {
+            app.run("calendar.newMeeting", json!({"form":true}));
+        }
     }
     ui.separator();
 }

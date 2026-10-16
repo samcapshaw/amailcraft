@@ -12,7 +12,7 @@ The goal is a refined mail experience with Apple styled, PC, and Omarchy interfa
 | Unified mailboxes | Combined Inbox and Sent folders, scoped search, source-aware message actions |
 | Graph mail | Initial OAuth Graph transport, folder discovery, delta/MIME sync, read/flag/move/delete and sending; local fixture validation |
 | CalDAV calendars | Read-only discovery, saved sources, credential recovery, disconnect controls and scheduled background refresh into offline snapshots; bounded event window, no server writes |
-| Connected organizer | Opt-in Graph calendars (90 days back, one year ahead) and default contacts; offline snapshots, selected conditional edits, single timed appointment creation/deletion, attendee responses and persistent pending-change review |
+| Connected organizer | Opt-in Graph calendars (90 days back, one year ahead) and default contacts; offline snapshots, selected conditional edits, single timed appointment creation/deletion and meeting invitations, attendee responses and persistent pending-change review |
 | Linked mailboxes | Shared/delegated labels, independent OAuth grants, receive-only default, explicit Send As opt-in |
 | Compose | Visible sender and signature selector, compact formatting row, optional Cc/Bcc, deeper tools in menus |
 | Settings | Icon navigation, layered grouped forms, aligned controls, switches, appearance selector, Save/Cancel |
@@ -27,7 +27,7 @@ The goal is a refined mail experience with Apple styled, PC, and Omarchy interfa
 - Verify keyboard navigation, accessibility, and narrow-window behavior throughout the Mac shell.
 - Validate linked mailbox OAuth and Send As behavior against a Microsoft 365 tenant before claiming production compatibility.
 - Validate the initial Graph transport against a tenant; add richer permission feedback and broader mail operations.
-- Add meeting creation/cancellation, recurring-series operations, contact creation/deletion, broader organizer/shared-calendar workflows and custom contact folders; add a configurable delegated sending mode.
+- Add meeting cancellation, recurring-series operations, contact creation/deletion, broader organizer/shared-calendar workflows and custom contact folders; add a configurable delegated sending mode.
 - Prepare a signed, notarized Mac distribution and fork-specific release process.
 
 See [Mac account setup and limits](docs/mac.md) for implemented behavior and known gaps.

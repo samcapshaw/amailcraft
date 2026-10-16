@@ -111,7 +111,7 @@ Calendar/contact creation/deletion and broader editing remain backend work; see 
 
 Connected Microsoft 365 calendars and default contacts can now be enabled in Graph account settings. They use read-only offline snapshots, with an explicit source strip and refresh action. See [connected-service setup and limits](microsoft365.md#connected-calendars-and-contacts).
 
-Connected organizer items also support optional, server-confirmed edits and attendee responses through the dedicated Microsoft 365 sheets. Generic cached-item editors stay read-only. Enable the separate editing grant and refresh; see [editing setup and limits](microsoft365.md#editing-and-meeting-responses).
+Connected organizer items also support optional, server-confirmed edits, single timed meeting invitations and attendee responses through the dedicated Microsoft 365 sheets. Generic cached-item editors stay read-only. Enable the separate editing grant and refresh; see [editing setup and limits](microsoft365.md#editing-and-meeting-responses).
 
 The Omarchy profile adds a crisp blue window outline, indigo surfaces, lavender text, cyan navigation accents, square sender avatars, and monospace chrome and mailbox metadata. Message prose stays proportional. These details apply only to the Omarchy profile; custom colors retain its geometry. The footer reports offline, syncing, attention, ready, or a previously successful sync from actual local state.
 

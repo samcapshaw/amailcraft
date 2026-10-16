@@ -66,6 +66,8 @@ pub struct GraphClient {
 pub struct GraphPage {
     pub values: Vec<Value>,
     pub delta: Option<String>,
+    /// Continuation of a single-page download.
+    pub next: Option<String>,
     /// Total HTTP payload bytes across every page.
     pub bytes_received: usize,
 }
@@ -231,7 +233,7 @@ impl GraphClient {
                         || matches!(error, NetError::Http { status: 500..=599, .. }) =>
                 {
                     Err(NetError::Refused(
-                        "Outcome uncertain. Check the calendar before retrying this appointment.".into(),
+                        "Outcome uncertain. Check the calendar before retrying this event.".into(),
                     ))
                 }
                 Err(error) => Err(error),
@@ -372,6 +374,38 @@ impl GraphClient {
             cursor,
         )
     }
+
+    /// One message delta page. Callers checkpoint it before following the next link.
+    pub fn messages_delta_page(&self, folder: &str, cursor: Option<&str>) -> Result<GraphPage> {
+        let url=cursor.map(str::to_owned).unwrap_or_else(||self.url(&format!("mailFolders/{}/messages/delta?$select=id,parentFolderId,isRead,isDraft,flag,receivedDateTime&$orderby=receivedDateTime%20desc&$top=100",percent_encode(folder))));
+        self.checked_url(&url)?;
+        let bytes = self.request("GET", &url, "application/json", None)?;
+        let doc: Value = serde_json::from_slice(&bytes).map_err(|e| NetError::Protocol(e.to_string()))?;
+        let values = doc
+            .get("value")
+            .and_then(Value::as_array)
+            .ok_or_else(|| NetError::Protocol("Graph page has no message array".into()))?;
+        if values.len() > 1000 {
+            return Err(NetError::TooLarge("Graph message page".into()));
+        }
+        let link = |key: &str| -> Result<Option<String>> {
+            match doc.get(key) {
+                None => Ok(None),
+                Some(v) => {
+                    let link =
+                        v.as_str().ok_or_else(|| NetError::Protocol("Invalid Graph continuation".into()))?;
+                    self.checked_url(link)?;
+                    Ok(Some(link.into()))
+                }
+            }
+        };
+        let next = link("@odata.nextLink")?;
+        let delta = link("@odata.deltaLink")?;
+        if next.is_some() == delta.is_some() || next.as_deref() == Some(&url) {
+            return Err(NetError::Protocol("Graph page has invalid continuation state".into()));
+        }
+        Ok(GraphPage { values: values.clone(), delta, next, bytes_received: bytes.len() })
+    }
     pub fn mime(&self, id: &str) -> Result<Vec<u8>> {
         self.request("GET", &self.url(&format!("messages/{}/$value", percent_encode(id))), "text/plain", None)
     }
@@ -421,6 +455,64 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn message_pages_stop_at_checkpoint_and_resume_opaque_url() {
+        let (base, thread, seen) = serve(2, |req| {
+            let host = req.header("host").unwrap();
+            if req.path.contains("opaque=token") {
+                response(
+                    200,
+                    &json!({"value":[],"@odata.deltaLink":format!("http://{host}/v1.0/users/owner%40example.net/delta?opaque=done")})
+                        .to_string(),
+                )
+            } else {
+                assert!(req.path.contains("receivedDateTime%20desc"));
+                response(200, &json!({"value":[{"id":"m1"}],"@odata.nextLink":format!("http://{host}/v1.0/users/owner%40example.net/next?opaque=token")}).to_string())
+            }
+        });
+        let client = GraphConn::new(
+            &format!("{base}/v1.0"),
+            "owner@example.net",
+            "fixture",
+            ConnectOptions { allow_plaintext_auth: true, ..Default::default() },
+        )
+        .unwrap()
+        .connect()
+        .unwrap();
+        let first = client.messages_delta_page("inbox", None).unwrap();
+        assert_eq!(first.values.len(), 1);
+        assert!(first.delta.is_none());
+        let second = client.messages_delta_page("inbox", first.next.as_deref()).unwrap();
+        assert!(second.next.is_none());
+        assert!(second.delta.is_some());
+        thread.join().unwrap();
+        assert_eq!(seen.try_iter().count(), 2);
+    }
+
+    #[test]
+    fn message_page_rejects_missing_or_ambiguous_checkpoints() {
+        let (base, thread, _) = serve(2, |req| {
+            let host = req.header("host").unwrap();
+            if req.path.contains("missing") {
+                response(200, r#"{"value":[]}"#)
+            } else {
+                response(200, &json!({"value":[],"@odata.nextLink":format!("http://{host}/v1.0/users/owner%40example.net/next"),"@odata.deltaLink":format!("http://{host}/v1.0/users/owner%40example.net/delta")}).to_string())
+            }
+        });
+        let client = GraphConn::new(
+            &format!("{base}/v1.0"),
+            "owner@example.net",
+            "fixture",
+            ConnectOptions { allow_plaintext_auth: true, ..Default::default() },
+        )
+        .unwrap()
+        .connect()
+        .unwrap();
+        assert!(client.messages_delta_page("missing", None).is_err());
+        assert!(client.messages_delta_page("both", None).is_err());
+        thread.join().unwrap();
+    }
+
+    #[test]
     fn appointment_create_is_calendar_scoped_and_carries_the_stable_transaction() {
         let (base, thread, seen) = serve(2, |req| {
             if req.method == "GET" {
@@ -453,6 +545,33 @@ mod tests {
             .unwrap();
         // A request without a stable identifier never reaches the server.
         assert!(client.write_connected("event", "team", "create", "", &json!({})).is_err());
+        thread.join().unwrap();
+        assert_eq!(seen.try_iter().count(), 2);
+    }
+    #[test]
+    fn meeting_creation_preserves_attendee_roles_and_transaction_in_one_post() {
+        let (base, thread, seen) = serve(2, |req| {
+            if req.method == "GET" {
+                return response(200, r#"{"canEdit":true}"#);
+            }
+            assert_eq!(req.method, "POST");
+            assert!(req.path.ends_with("/calendars/team/events"));
+            let data: Value = serde_json::from_slice(&req.body).unwrap();
+            assert_eq!(data["attendees"][0]["emailAddress"]["address"], "maya@example.net");
+            assert_eq!(data["attendees"][1]["type"], "optional");
+            assert_eq!(data["transactionId"], "meeting-fixture");
+            response(201, r#"{"id":"new-meeting"}"#)
+        });
+        let client = GraphConn::new(
+            &format!("{base}/v1.0"),
+            "team@example.net",
+            "fixture",
+            ConnectOptions { allow_plaintext_auth: true, ..Default::default() },
+        )
+        .unwrap()
+        .connect()
+        .unwrap();
+        client.write_connected("event","team","create","",&serde_json::json!({"subject":"Review","transactionId":"meeting-fixture","attendees":[{"emailAddress":{"address":"maya@example.net"},"type":"required"},{"emailAddress":{"address":"alex@example.net"},"type":"optional"}]})).unwrap();
         thread.join().unwrap();
         assert_eq!(seen.try_iter().count(), 2);
     }

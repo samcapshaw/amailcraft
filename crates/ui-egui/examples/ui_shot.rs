@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run -p mailcraft-ui-egui --example ui_shot -- <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME]
-//!     [--reading right|bottom|off] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response|create|delete] [--graph-pending] [--caldav-preview] [--scale F]
+//!     [--reading right|bottom|off] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response|create|meeting|delete] [--graph-pending] [--caldav-preview] [--scale F]
 //! ```
 //!
 //! Defaults: 1920x1040, light theme, Mail module, nothing selected, scale 1. `--module` takes mail, calendar,
@@ -187,7 +187,7 @@ fn parse() -> Result<Opts, String> {
         }
     }
     if o.out.is_empty() {
-        return Err("usage: ui_shot <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME] [--reading POS] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response|create|delete] [--graph-pending] [--caldav-preview] [--scale F]".into());
+        return Err("usage: ui_shot <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME] [--reading POS] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response|create|meeting|delete] [--graph-pending] [--caldav-preview] [--scale F]".into());
     }
     Ok(o)
 }
@@ -374,6 +374,10 @@ fn shoot(o: &Opts) -> Result<(), String> {
             if o.graph_pending {
                 app.run("graph.edit", json!({"id":id.0,"fields":{"company":"Studio North"}}));
                 app.run("graph.pending", json!({}));
+            } else if o.graph_edit.as_deref() == Some("meeting") {
+                if let Some(a) = app.s.mailbox.appointments.get(&id) {
+                    app.run("graph.createMeeting", json!({"folder":a.folder.0}));
+                }
             } else if o.graph_edit.as_deref() == Some("create") {
                 if let Some(a) = app.s.mailbox.appointments.get(&id) {
                     app.run("graph.createAppointment", json!({"folder":a.folder.0}));

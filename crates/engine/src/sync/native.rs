@@ -170,6 +170,10 @@ pub(super) struct OpError {
 }
 
 pub(super) enum Event {
+    GraphMailPage {
+        account: AccountId,
+        page: Box<super::graph::Checkpoint>,
+    },
     Progress {
         account: AccountId,
         text: String,
@@ -275,7 +279,8 @@ pub(super) enum Event {
 impl Event {
     fn account(&self) -> AccountId {
         match self {
-            Event::Progress { account, .. }
+            Event::GraphMailPage { account, .. }
+            | Event::Progress { account, .. }
             | Event::OpDone { account, .. }
             | Event::Sent { account, .. }
             | Event::Folders { account, .. }
@@ -321,6 +326,11 @@ pub(super) struct Events {
 }
 
 impl Events {
+    #[cfg(test)]
+    pub(super) fn test_pair() -> (Self, mpsc::Receiver<(u64, Event)>) {
+        let (tx, rx) = mpsc::channel();
+        (Self { tx, serial: NO_WORKER }, rx)
+    }
     /// False when the session is gone.
     pub(super) fn send(&self, e: Event) -> bool {
         self.tx.send((self.serial, e)).is_ok()
@@ -1838,6 +1848,35 @@ pub(super) fn poll_events(s: &mut Session) -> bool {
     if events.is_empty() {
         return false;
     }
+    let mut changed = false;
+    let mut batch = Vec::new();
+    let mut failed = BTreeSet::new();
+    for event in events {
+        if failed.contains(&event.account()) {
+            continue;
+        }
+        if matches!(&event, Event::GraphMailPage { .. }) {
+            if !batch.is_empty() {
+                changed |= apply_batch(s, std::mem::take(&mut batch)).0;
+            }
+            let (updated, error) = apply_batch(s, vec![event]);
+            changed |= updated;
+            if let Some(account) = error {
+                failed.insert(account);
+            }
+        } else {
+            batch.push(event);
+        }
+    }
+    if !batch.is_empty() {
+        changed |= apply_batch(s, batch).0;
+    }
+    changed
+}
+fn apply_batch(s: &mut Session, events: Vec<Event>) -> (bool, Option<AccountId>) {
+    let page_account = events
+        .iter()
+        .find_map(|e| if let Event::GraphMailPage { account, .. } = e { Some(*account) } else { None });
     crate::accounts::load_prefs(s);
     // Progress, tests and the end of a run leave the mailbox alone: no snapshot needed.
     let touches = events.iter().any(|e| {
@@ -1851,6 +1890,7 @@ pub(super) fn poll_events(s: &mut Session) -> bool {
                 | Event::Pop3New { .. }
                 | Event::Pop3Full { .. }
                 | Event::GraphPim { .. }
+                | Event::GraphMailPage { .. }
                 | Event::Jmap { .. }
                 | Event::OAuthDone { .. }
         )
@@ -1858,25 +1898,47 @@ pub(super) fn poll_events(s: &mut Session) -> bool {
     let prefs_before = s.sync.prefs.data.clone();
     let before = touches.then(|| s.mailbox.clone());
     let res = catch_unwind(AssertUnwindSafe(|| apply_all(s, events)));
-    if s.sync.prefs.data != prefs_before {
-        crate::accounts::save_prefs(s);
-    }
     let Some(before) = before else {
         if res.is_err() {
             log::error!("applying send/receive status panicked");
         }
-        return false;
+        if s.sync.prefs.data != prefs_before {
+            crate::accounts::save_prefs(s);
+        }
+        return (false, None);
     };
     if res.is_err() {
         log::error!("applying send/receive results panicked; the mailbox was restored");
         s.mailbox = before;
-        return false;
+        s.sync.prefs.data = prefs_before;
+        if let Some(account) = page_account {
+            s.sync.rt.forget(account);
+        }
+        return (false, page_account);
     }
     let ops = crate::session::diff_ops(&before, &s.mailbox);
     let changed = !ops.is_empty();
     s.journal(ops);
+    if let Some(account) = page_account
+        && s.store.is_some()
+        && !s.pending_ops.is_empty()
+    {
+        s.mailbox = before;
+        s.sync.prefs.data = prefs_before;
+        s.pending_ops = vec![mailcraft_store::Op::Replace(Box::new(s.mailbox.clone()))];
+        s.sync.rt.forget(account);
+        s.sync.runs.entry(account).or_default().error =
+            Some("Local mail could not be saved; download progress was kept at the previous page.".into());
+        s.notify(crate::Notice::Error(
+            "Mail downloads paused because local mail could not be saved. Progress was not advanced.".into(),
+        ));
+        return (false, Some(account));
+    }
+    if s.sync.prefs.data != prefs_before {
+        crate::accounts::save_prefs(s);
+    }
     s.tidy_selection();
-    changed
+    (changed, None)
 }
 
 fn apply_all(s: &mut Session, events: Vec<Event>) {
@@ -1941,6 +2003,9 @@ fn apply_all(s: &mut Session, events: Vec<Event>) {
                 crate::cmd::connected::finish(s, account, id, result)
             }
             Event::GraphPim { account, snapshot } => super::graph_pim::apply(s, account, snapshot),
+            Event::GraphMailPage { account, page } => {
+                super::graph::apply_checkpoint(s, account, *page, &mut new_inbox)
+            }
             Event::Jmap { account, ev } => super::jmap::apply(s, account, ev, &mut new_inbox),
             Event::Tokens { account, tokens } => store_tokens(s, account, &tokens),
             Event::OAuthPrompt { account, prompt } => {
@@ -2619,6 +2684,51 @@ mod tests {
     use crate::cmd::rules::tests::session;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn graph_page_checkpoint_replays_without_duplicates_and_rolls_back_failed_storage() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::open(dir.path()).unwrap();
+        let added = s.run("accounts.add", &serde_json::json!({"kind":"graph","address":"owner@example.net","incoming":{"host":"https://graph.microsoft.com/v1.0"}})).unwrap();
+        let account = AccountId(added["account"].as_u64().unwrap() as u32);
+        let inbox = s.mailbox.role_folder(account, FolderRole::Inbox).unwrap();
+        s.mailbox.folders.get_mut(&inbox).unwrap().remote_name = Some("inbox-id".into());
+        s.journal(vec![mailcraft_store::Op::Replace(Box::new(s.mailbox.clone()))]);
+        let page = |id: &str, cursor: &str| {
+            Event::GraphMailPage {
+            account,
+            page: Box::new(super::super::graph::Checkpoint {
+                list: vec![super::super::jmap::JEmail {
+                    id: id.into(), mailboxes: vec!["inbox-id".into()], keywords: vec![], size: None,
+                    raw: Some(format!("From: sender@example.net\r\nSubject: {id}\r\nMessage-ID: <{id}@example.net>\r\n\r\nSynthetic body").into_bytes()),
+                }],
+                gone: vec![], cursors: cursor.into(),
+                round: Some(crate::accounts::GraphRound { pending: ["inbox-id".into()].into(), ..Default::default() }),
+            }),
+        }
+        };
+        assert!(apply_batch(&mut s, vec![page("m1", "first")]).0);
+        let first_id = s.mailbox.items_in(inbox)[0].id;
+        drop(s);
+        let mut s = Session::open(dir.path()).unwrap();
+        assert_eq!(s.sync.prefs.data.graph[&account.0].email_state, "first");
+        apply_batch(&mut s, vec![page("m1", "first")]);
+        assert_eq!(s.mailbox.items_in(inbox).len(), 1);
+        assert_eq!(s.mailbox.items_in(inbox)[0].id, first_id);
+        std::fs::rename(dir.path().join("blobs"), dir.path().join("saved-blobs")).unwrap();
+        std::fs::write(dir.path().join("blobs"), b"storage failure fixture").unwrap();
+        let result = apply_batch(&mut s, vec![page("m2", "second")]);
+        assert_eq!(result, (false, Some(account)));
+        assert_eq!(s.mailbox.items_in(inbox).len(), 1);
+        assert_eq!(s.sync.prefs.data.graph[&account.0].email_state, "first");
+        std::fs::remove_file(dir.path().join("blobs")).unwrap();
+        std::fs::rename(dir.path().join("saved-blobs"), dir.path().join("blobs")).unwrap();
+        s.flush_pending();
+        drop(s);
+        let s = Session::open(dir.path()).unwrap();
+        assert_eq!(s.mailbox.items_in(inbox).len(), 1);
+        assert_eq!(s.sync.prefs.data.graph[&account.0].email_state, "first");
+    }
 
     /// A local plain-HTTP OAuth server: `respond(path, form body)` gives (status, JSON). Serves until dropped
     /// by the test process (thread detached; at most `n` requests).

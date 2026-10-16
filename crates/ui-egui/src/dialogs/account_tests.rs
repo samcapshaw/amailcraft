@@ -1033,3 +1033,32 @@ fn caldav_management_disconnect_keeps_calendar_and_removes_secret() {
     assert!(h.state().s.secrets.keys().is_empty());
     assert!(!mailcraft_engine::cmd::calendar::props::is_read_only(&h.state().s.mailbox, folder));
 }
+
+#[test]
+fn connected_meeting_form_queues_explicit_invitees_offline() {
+    let mut app = sample_app();
+    app.s.view.work_offline = true;
+    let value=app.s.run("accounts.add",&json!({"kind":"graph","address":"owner@example.net","graphCalendars":true,"graphEditing":true,"incoming":{"host":"https://graph.microsoft.com/v1.0"}})).unwrap();
+    let account = AccountId(value["account"].as_u64().unwrap() as u32);
+    let folder = app.s.mailbox.role_folder(account, FolderRole::Calendar).unwrap();
+    app.s.mailbox.folders.get_mut(&folder).unwrap().graph_source =
+        Some(mailcraft_model::folder::GraphFolderSource {
+            remote_id: "calendar-fixture".into(),
+            ..Default::default()
+        });
+    app.s.run("graph.createMeeting", &json!({"folder":folder.0})).unwrap();
+    let mut h = harness(app);
+    set_text(&mut h, "Subject", "Review layouts");
+    h.get_by_label("Queue invitations").click();
+    step(&mut h);
+    assert!(mailcraft_engine::cmd::connected::pending(&h.state().s).is_empty());
+    set_text(&mut h, "Required attendees", "maya@example.net");
+    set_text(&mut h, "Optional attendees", "alex@example.net");
+    h.get_by_label("Queue invitations").click();
+    step(&mut h);
+    let pending = mailcraft_engine::cmd::connected::pending(&h.state().s);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].payload["attendees"][0]["emailAddress"]["address"], "maya@example.net");
+    assert_eq!(pending[0].payload["attendees"][1]["type"], "optional");
+    assert!(!names(&h).iter().any(|name| name == "graphCreateMeeting"));
+}
