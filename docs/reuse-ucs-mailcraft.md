@@ -1,5 +1,49 @@
 # UCS-Care-Group MailCraft: update review
 
+## Follow-up review: 2026-10-17
+
+Pinned snapshot: [`a030a7209e3b8543aa4679e34c502798452ea88d`](https://github.com/UCS-Care-Group/mailcraft/tree/a030a7209e3b8543aa4679e34c502798452ea88d).
+GitHub's comparison against the October 15 snapshot reports 136 commits (including merges) and
+188 changed files. Source was inspected locally without building or executing it. The downloaded
+snapshot and comparison are in ignored `target/scratch/ucs-review-2026-10-17`. MIT OR Apache-2.0
+licensing and the MailCraft contributors' MIT notice remain present.
+
+Our current baseline is `568cf96`: single timed meeting invitations and resumable Graph downloads
+are already implemented. The earlier recommendation below is historical; do not redo the download
+checkpoint work.
+
+### Most useful remaining adaptations
+
+| Priority | Inspected code | Benefit and integration boundary |
+|---|---|---|
+| 1 | `crates/net/src/graph/pace.rs`, `graph/mail/fetch.rs` | A per-mailbox request gate reserves capacity for foreground work, pauses requests after throttling, and distinguishes repeatable reads from operations that could create duplicates. Our transport currently reports throttling without an equivalent coordinated gate. Adapt the gate and read retry policy first; retain our held uncertain writes and conditional updates. |
+| 2 | `crates/engine/src/cmd/shared.rs`, `crates/ui-egui/src/shared_mailboxes.rs`, `apps/mailcraft-cli/tests/graph_shared.rs` | Opens a shared mailbox through its owner's Microsoft sign-in with shared-mail permissions; addresses the target mailbox explicitly and tests that its work never reaches the owner's mailbox. This could reduce repeated sign-ins in our linked-account setup. It changes our credential/account model and needs careful owner binding, consent handling, account-removal behavior, and synthetic isolation tests. |
+| 3 | `crates/net/src/graph/mail/fetch.rs`, `crates/model/src/sync/`, `crates/engine/src/store.rs` | Foreground/background full-message fetching and disk-resident body/attachment data with bounded memory. Our page checkpoint path still fetches new-message MIME within each page. Separating previews from full content could improve first-run speed and large-mailbox memory use. Search, reply, rules, export, undo and missing-content recovery must keep working. |
+| 4 | `crates/engine/src/store.rs` (`Saver`), store tests and desktop save integration | Background saves with progress and explicit close/open coordination could keep the UI responsive after large downloads. We already have a journal and external raw-message blobs in a separate store crate; adapt the worker/lifecycle design, not their file format or entire store. Preserve our rule that download progress cannot lead durable mail data. |
+| 5 | `crates/net/src/graph/mail/drafts.rs`, `crates/engine/src/cmd/graph_drafts.rs` | Server drafts, reply/forward creation, attachment reconciliation and large-attachment upload sessions extend our local-draft/direct-send implementation. It is a substantial feature, not a drop-in helper. Preserve reviewed uncertain outcomes, current sender permissions and source binding. |
+| 6 | `crates/engine/src/cmd/sync_progress.rs`, `crates/model/src/sync/progress.rs` | Structured progress per account, phases, counts, bounded problem lists, and full-message progress; waiting accounts can be skipped. Useful for a compact progress sheet styled for our profiles, rather than importing their UI host. |
+
+The shared-mailbox implementation explicitly remains behind `MAILCRAFT_SHARED_MAILBOXES=1`.
+Its current slice downloads mail and integrates search/counts/favorites; shared writes, Send As/on
+behalf, and shared calendars are still absent. It must not be presented as a finished solution to our
+shared/delegated-account goal.
+
+Draft code uses a persistent marker to look for uncertain creates, and Graph reply/forward actions to
+retain the server conversation where possible. Upload-session URLs and lost-response reconciliation
+need independent security/concurrency review before adaptation. The candidate's own gap document
+says its newer Graph writes have not met the real service; this review did not run their tests or verify
+a live tenant. README feature claims and gap documentation sometimes differ, so implementation and
+fixture presence are the basis for this shortlist.
+
+Recommended sequence: coordinated throttling and foreground priority, owner-linked shared mailbox
+authentication, then preview/body separation with structured progress. Treat background persistence
+and server drafts as separate bounded projects. Keep our Apple styled, PC and Omarchy design.
+
+No source or assets have been imported by this review. Any later selective adaptation should pin its
+source, preserve the applicable license/copyright notices, and land with our own regression tests.
+
+## Original review: 2026-10-15
+
 Reviewed 2026-10-15 at [`d78cae3996a9f35a8abb9095aef05d895bb83220`](https://github.com/UCS-Care-Group/mailcraft/tree/d78cae3996a9f35a8abb9095aef05d895bb83220).
 The MIT notice names the MailCraft contributors; the repository offers MIT OR Apache-2.0.
 Selected sources, tests, manifests and documentation were inspected in ignored

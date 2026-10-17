@@ -170,6 +170,11 @@ pub(super) struct OpError {
 }
 
 pub(super) enum Event {
+    GraphFull {
+        account: AccountId,
+        remote: String,
+        raw: Vec<u8>,
+    },
     GraphMailPage {
         account: AccountId,
         page: Box<super::graph::Checkpoint>,
@@ -279,7 +284,8 @@ pub(super) enum Event {
 impl Event {
     fn account(&self) -> AccountId {
         match self {
-            Event::GraphMailPage { account, .. }
+            Event::GraphFull { account, .. }
+            | Event::GraphMailPage { account, .. }
             | Event::Progress { account, .. }
             | Event::OpDone { account, .. }
             | Event::Sent { account, .. }
@@ -493,12 +499,23 @@ pub(super) fn oauth_http_options(s: &Session) -> ConnectOptions {
 }
 
 pub(super) fn conn_settings(s: &Session, a: &Account) -> Result<Conn, String> {
+    let credential_owner = crate::accounts::graph_credential_owner(s, a).map_err(|e| e.to_string())?;
+    let shared_owner = credential_owner != a.id;
+    if shared_owner
+        && account_options(s, credential_owner).oauth.and_then(|b| b.expires_at).is_some_and(|expiry| {
+            mailcraft_net::oauth::now_unix().saturating_add(TOKEN_REFRESH_SKEW) >= expiry
+        })
+    {
+        return Err("Refresh the owner's Microsoft 365 account before refreshing this shared mailbox.".into());
+    }
     let inc = a.incoming.as_ref().ok_or("The account has no incoming mail server.")?;
     if inc.host.trim().is_empty() {
         return Err("The account has no incoming mail server.".into());
     }
-    let secret = account_secret(s, a.id, false).ok_or_else(|| {
-        if a.kind == AccountKind::Graph {
+    let secret = account_secret(s, credential_owner, false).ok_or_else(|| {
+        if shared_owner {
+            "Sign in to the owner’s Microsoft 365 account before refreshing this shared mailbox.".into()
+        } else if a.kind == AccountKind::Graph {
             format!("Sign in to Microsoft 365 for {} (Accounts).", a.address)
         } else {
             format!("Enter the password for {} (Account Settings).", a.address)
@@ -536,7 +553,7 @@ pub(super) fn conn_settings(s: &Session, a: &Account) -> Result<Conn, String> {
         }
         _ => None,
     };
-    let oauth = if a.credential == CredentialKind::OAuthToken {
+    let oauth = if a.credential == CredentialKind::OAuthToken && !shared_owner {
         match (oauth_provider(s, a.id), s.secrets.get(&refresh_key(a.id))) {
             (Some(provider), Some(refresh_token)) => Some(OAuthRefresh {
                 provider,
@@ -758,6 +775,26 @@ pub(super) fn dispatch(s: &mut Session, id: AccountId, plan: Plan) -> Result<boo
         return Ok(false);
     }
     crate::accounts::load_prefs(s);
+    let owner = crate::accounts::graph_credential_owner(s, &a).map_err(|e| e.to_string())?;
+    if owner != id && owner_token_due(s, owner) {
+        if let Some(error) = s.sync.owner_renewal_errors.get(&owner) {
+            return Err(error.clone());
+        }
+        if s.secrets.get(&refresh_key(owner)).is_none() || oauth_provider(s, owner).is_none() {
+            return Err("Sign in again on the owner account to refresh this shared mailbox.".into());
+        }
+        let pending = s.sync.owner_waiters.entry(owner).or_default().entry(id).or_default();
+        pending.merge(&plan);
+        s.sync.runs.entry(id).or_default().progress = "Renewing owner sign-in…".into();
+        if !s.sync.runs.get(&owner).is_some_and(|run| run.busy.is_some()) {
+            let renewal = Plan { user: true, ..Default::default() };
+            if let Err(error) = dispatch(s, owner, renewal) {
+                finish_owner_waiters(s, owner, Some(error.clone()));
+                return Err(error);
+            }
+        }
+        return Ok(false);
+    }
     let conn = conn_settings(s, &a)?;
     let opts = account_options(s, id);
     let now = s.now().unix;
@@ -794,7 +831,12 @@ pub(super) fn dispatch(s: &mut Session, id: AccountId, plan: Plan) -> Result<boo
             job.pop3 = pop3_job(s, &a, plan.receive, force_headers || slow, &fetch_items, now);
         }
         Incoming::Jmap(_) => job.jmap = super::jmap::build_job(s, &a, &plan, window),
-        Incoming::Graph(_) => job.graph = super::graph::build_job(s, &a, &plan)?,
+        Incoming::Graph(_) => {
+            job.graph = super::graph::build_job(s, &a, &plan)?;
+            if job.graph.is_none() && owner_token_due(s, id) && job.conn.oauth.is_some() {
+                job.graph = Some(super::graph::GraphJob::default());
+            }
+        }
     }
     if job.ops.is_empty()
         && job.outgoing.is_empty()
@@ -1891,6 +1933,7 @@ fn apply_batch(s: &mut Session, events: Vec<Event>) -> (bool, Option<AccountId>)
                 | Event::Pop3Full { .. }
                 | Event::GraphPim { .. }
                 | Event::GraphMailPage { .. }
+                | Event::GraphFull { .. }
                 | Event::Jmap { .. }
                 | Event::OAuthDone { .. }
         )
@@ -1995,6 +2038,28 @@ fn apply_all(s: &mut Session, events: Vec<Event>) {
             Event::Pop3New { account, uidl, raw, size, headers_only } => {
                 apply_pop3_new(s, account, &uidl, &raw, size, headers_only, &mut new_inbox)
             }
+            Event::GraphFull { account, remote, raw } => {
+                let id = s
+                    .mailbox
+                    .mail
+                    .values()
+                    .find(|m| {
+                        m.remote_id.as_ref() == Some(&remote)
+                            && s.mailbox.folder(m.folder).is_some_and(|f| f.account == account)
+                    })
+                    .map(|m| m.id);
+                if let Some(id) = id {
+                    let incomplete = super::cmds::is_header_only(s, id);
+                    if fill_item(s, id, &raw)
+                        && incomplete
+                        && s.mailbox.mail.get(&id).is_some_and(|m| {
+                            Some(m.folder) == s.mailbox.role_folder(account, FolderRole::Inbox)
+                        })
+                    {
+                        new_inbox.push(id);
+                    }
+                }
+            }
             Event::Pop3Full { account, uidl, raw } => apply_pop3_full(s, account, &uidl, &raw),
             Event::Pop3Server { account, present, deleted } => {
                 apply_pop3_server(s, account, &present, &deleted)
@@ -2063,6 +2128,7 @@ fn store_tokens(s: &mut Session, account: AccountId, t: &TokenSet) {
         log::error!("cannot store the refresh token of account {}: {e}", account.0);
     }
     let exp = t.expires_at;
+    s.sync.owner_renewal_errors.remove(&account);
     if let Some(o) = crate::accounts::prefs(s).accounts.get_mut(&account.0)
         && let Some(b) = o.oauth.as_mut()
     {
@@ -2123,6 +2189,7 @@ fn fill_item(s: &mut Session, id: ItemId, raw: &[u8]) -> bool {
     full.ignored = old.ignored;
     full.conversation = old.conversation;
     s.mailbox.mail.insert(id, full);
+    s.sync.track.bodies.insert(id);
     let p = crate::accounts::prefs(s);
     p.headers_only.remove(&id.0);
     p.marked.remove(&id.0);
@@ -2378,6 +2445,7 @@ fn message_sent(s: &mut Session, account: AccountId, item: ItemId, result: Resul
 }
 
 fn run_done(s: &mut Session, account: AccountId, error: Option<String>) {
+    let owner_error = error.clone();
     let now = s.now().unix;
     let run = s.sync.runs.entry(account).or_default();
     run.busy = None;
@@ -2398,6 +2466,40 @@ fn run_done(s: &mut Session, account: AccountId, error: Option<String>) {
         && let Err(e) = dispatch(s, account, again)
     {
         s.sync.runs.entry(account).or_default().error = Some(e);
+    }
+    finish_owner_waiters(s, account, owner_error);
+}
+
+fn owner_token_due(s: &Session, owner: AccountId) -> bool {
+    account_options(s, owner)
+        .oauth
+        .and_then(|b| b.expires_at)
+        .is_some_and(|expiry| mailcraft_net::oauth::now_unix().saturating_add(TOKEN_REFRESH_SKEW) >= expiry)
+}
+
+fn finish_owner_waiters(s: &mut Session, owner: AccountId, error: Option<String>) {
+    let Some(waiters) = s.sync.owner_waiters.remove(&owner) else { return };
+    let failure = owner_token_due(s, owner).then(|| {
+        format!(
+            "Sign in again on the owner account. {}",
+            error.unwrap_or_else(|| "Its sign-in could not be renewed.".into())
+        )
+    });
+    if let Some(error) = &failure {
+        s.sync.owner_renewal_errors.insert(owner, error.clone());
+    }
+    for (child, plan) in waiters {
+        let blocked_until = s.now().unix.saturating_add(BLOCKED_RETRY_SECS);
+        let result = match &failure {
+            Some(error) => Err(error.clone()),
+            None => dispatch(s, child, plan).map(|_| ()),
+        };
+        if let Err(error) = result {
+            let run = s.sync.runs.entry(child).or_default();
+            run.progress.clear();
+            run.error = Some(error);
+            run.blocked_until = blocked_until;
+        }
     }
 }
 
@@ -2698,6 +2800,7 @@ mod tests {
             Event::GraphMailPage {
             account,
             page: Box::new(super::super::graph::Checkpoint {
+                previews: BTreeMap::new(),
                 list: vec![super::super::jmap::JEmail {
                     id: id.into(), mailboxes: vec!["inbox-id".into()], keywords: vec![], size: None,
                     raw: Some(format!("From: sender@example.net\r\nSubject: {id}\r\nMessage-ID: <{id}@example.net>\r\n\r\nSynthetic body").into_bytes()),
@@ -3055,6 +3158,141 @@ mod tests {
 #[cfg(test)]
 mod graph_delivery_tests {
     use super::*;
+    #[test]
+    fn linked_waiters_merge_and_resume_only_after_owner_tokens_are_saved() {
+        let mut s = crate::sample::sample_session();
+        let value = s.run("accounts.add", &json!({"kind":"graph", "address":"owner@example.net", "incoming":{"host":mailcraft_net::graph::ENDPOINT}, "oauthToken":"old-access"})).unwrap();
+        let owner = AccountId(value["account"].as_u64().unwrap() as u32);
+        crate::accounts::update_options(&mut s, owner, |o| {
+            o.oauth = Some(crate::accounts::OAuthBinding {
+                scopes: vec!["https://graph.microsoft.com/Mail.ReadWrite.Shared".into()],
+                token_endpoint: "https://login.microsoftonline.com/organizations/oauth2/v2.0/token".into(),
+                client_id: "fixture-client".into(),
+                expires_at: Some(1),
+                ..Default::default()
+            })
+        });
+        s.secrets.set(&refresh_key(owner), "owner-refresh").unwrap();
+        let value = s
+            .run(
+                "accounts.addShared",
+                &json!({"account":owner.0,"address":"team@example.net","useOwnerSignIn":true}),
+            )
+            .unwrap();
+        let child = AccountId(value["account"].as_u64().unwrap() as u32);
+        // An existing owner worker owns renewal; child requests must not launch another.
+        s.sync.runs.entry(owner).or_default().busy = Some(InFlight::default());
+        assert!(!dispatch(&mut s, child, Plan::default()).unwrap());
+        assert!(!dispatch(&mut s, child, Plan { user: true, ..Default::default() }).unwrap());
+        assert_eq!(s.sync.owner_waiters[&owner].len(), 1);
+        assert!(s.sync.owner_waiters[&owner][&child].user);
+        run_done(&mut s, owner, Some("renewal rejected".into()));
+        assert!(s.sync.owner_waiters.is_empty());
+        assert!(s.sync.runs[&child].error.as_ref().unwrap().contains("Sign in again"));
+        assert!(dispatch(&mut s, child, Plan::default()).is_err());
+        let tokens = TokenSet {
+            access_token: "renewed-access".into(),
+            token_type: "Bearer".into(),
+            expires_at: Some(mailcraft_net::oauth::now_unix() + 3600),
+            refresh_token: Some("rotated-owner-refresh".into()),
+            scope: None,
+            id_token: None,
+        };
+        store_tokens(&mut s, owner, &tokens);
+        assert!(!s.sync.owner_renewal_errors.contains_key(&owner));
+        assert!(!dispatch(&mut s, child, Plan::default()).unwrap());
+        assert!(s.secrets.get(&refresh_key(child)).is_none());
+        assert_eq!(s.secrets.get(&refresh_key(owner)).as_deref(), Some("rotated-owner-refresh"));
+    }
+
+    #[test]
+    fn preview_checkpoint_and_full_content_keep_identity_and_local_flags() {
+        let mut s = crate::sample::sample_session();
+        let value = s.run("accounts.add", &json!({"kind":"graph", "address":"preview@example.net", "incoming":{"host":mailcraft_net::graph::ENDPOINT}})).unwrap();
+        let account = AccountId(value["account"].as_u64().unwrap() as u32);
+        let folder = s.mailbox.role_folder(account, FolderRole::Inbox).unwrap();
+        s.mailbox.folders.get_mut(&folder).unwrap().remote_name = Some("inbox".into());
+        let preview = json!({"subject":"Preview subject","bodyPreview":"First lines","from":{"emailAddress":{"address":"maya@example.net","name":"Maya"}},"receivedDateTime":"2026-10-17T12:30:00Z"});
+        let page = || Event::GraphMailPage {
+            account,
+            page: Box::new(super::super::graph::Checkpoint {
+                previews: [("remote-message".into(), preview.clone())].into(),
+                list: vec![super::super::jmap::JEmail {
+                    id: "remote-message".into(),
+                    mailboxes: vec!["inbox".into()],
+                    keywords: vec![],
+                    size: None,
+                    raw: None,
+                }],
+                gone: vec![],
+                cursors: "checkpoint".into(),
+                round: None,
+            }),
+        };
+        apply_batch(&mut s, vec![page()]);
+        let id = s.mailbox.items_in(folder)[0].id;
+        assert!(super::super::cmds::is_header_only(&s, id));
+        assert_eq!(s.mailbox.mail[&id].preview, "First lines");
+        s.mailbox.mail.get_mut(&id).unwrap().read = true;
+        apply_batch(&mut s, vec![page()]);
+        assert_eq!(s.mailbox.items_in(folder).len(), 1);
+        assert!(s.mailbox.mail[&id].read);
+        let preview_snapshot = s.mailbox.clone();
+        apply_batch(
+            &mut s,
+            vec![Event::GraphFull {
+                account,
+                remote: "remote-message".into(),
+                raw: b"From: maya@example.net\r\nSubject: Full subject\r\n\r\nFull body".to_vec(),
+            }],
+        );
+        assert!(!super::super::cmds::is_header_only(&s, id));
+        assert_eq!(s.mailbox.mail[&id].subject, "Full subject");
+        assert!(s.mailbox.mail[&id].read);
+        assert!(s.mailbox.mail[&id].raw.is_some());
+        assert_eq!(s.mailbox.mail[&id].remote_id.as_deref(), Some("remote-message"));
+        let live = s.mailbox.clone();
+        s.mailbox = preview_snapshot;
+        super::super::after_restore(&mut s, &live);
+        assert!(s.mailbox.mail[&id].raw.is_some(), "Undo must not discard downloaded content");
+    }
+
+    #[test]
+    fn owner_credentials_keep_shared_target_and_never_create_a_refresh_worker() {
+        let mut s = crate::sample::sample_session();
+        let value = s.run("accounts.add", &json!({"kind":"graph", "address":"owner@example.net", "incoming":{"host":mailcraft_net::graph::ENDPOINT}, "oauthToken":"owner-access"})).unwrap();
+        let owner = AccountId(value["account"].as_u64().unwrap() as u32);
+        crate::accounts::update_options(&mut s, owner, |o| {
+            o.oauth = Some(crate::accounts::OAuthBinding {
+                scopes: vec!["https://graph.microsoft.com/Mail.ReadWrite.Shared".into()],
+                ..Default::default()
+            })
+        });
+        let value = s
+            .run(
+                "accounts.addShared",
+                &json!({"account":owner.0,"address":"team@example.net","useOwnerSignIn":true}),
+            )
+            .unwrap();
+        let child = AccountId(value["account"].as_u64().unwrap() as u32);
+        let account = s.mailbox.account(child).unwrap().clone();
+        let conn = conn_settings(&s, &account).unwrap();
+        assert!(conn.oauth.is_none());
+        assert!(conn.smtp.is_none());
+        let Incoming::Graph(graph) = conn.incoming else { panic!("expected Graph") };
+        assert_eq!(graph.mailbox, "team@example.net");
+        let expected = mailcraft_net::graph::GraphConn::new(
+            &graph.endpoint,
+            "team@example.net",
+            "owner-access",
+            graph.options.clone(),
+        )
+        .unwrap();
+        assert_eq!(graph, expected);
+        crate::accounts::update_options(&mut s, owner, |o| o.oauth.as_mut().unwrap().expires_at = Some(1));
+        assert!(conn_settings(&s, &account).unwrap_err().contains("Refresh the owner"));
+    }
+
     #[test]
     fn uncertain_graph_submission_is_held_for_review_instead_of_automatic_retry() {
         let mut s = crate::sample::sample_session();

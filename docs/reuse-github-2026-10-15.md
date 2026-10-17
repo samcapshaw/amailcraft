@@ -1,5 +1,37 @@
 # GitHub reuse shortlist — 2026-10-15
 
+## ZIDAN44 follow-up: 2026-10-17
+
+Reviewed [`b31066a55737572b6ae12954ae9fd7e85d39694f`](https://github.com/ZIDAN44/mailcraft/tree/b31066a55737572b6ae12954ae9fd7e85d39694f).
+GitHub's comparison with the earlier pinned snapshot reports 36 new commits and 64 changed files.
+Source-only inspection is saved in ignored `target/scratch/zidan-review-2026-10-17`; no external code
+was built or run. MIT OR Apache-2.0 and the ArtCraft/MailCraft contributor MIT notice remain present.
+
+The most useful candidates complement the [UCS review](reuse-ucs-mailcraft.md):
+
+| Candidate | Inspected source | Fit for our app |
+|---|---|---|
+| CalDAV writes and CardDAV address books | `crates/net/src/dav.rs`, `fake_dav.rs` | Still the strongest provider-independent candidate: discovery, collection versions, ETag enumeration, batched resource fetches and conditional PUT. These routines are largely the same opportunity identified in the first review, not newly implemented since then. Our CalDAV is currently read-only and we lack CardDAV. |
+| Shared calendars | `crates/net/src/graph_pim.rs`, `crates/engine/src/session/pim.rs`, `crates/ui-egui/src/dialogs.rs` | Newer work opens another owner's default calendar by address and routes operations to that owner. Shared editability requires `canEdit == true`. Useful for our multi-account calendar direction, but not a complete shared-mailbox or arbitrary shared-calendar discovery implementation. |
+| Document attachment previews | `crates/mime/src/office.rs`, `crates/ui-egui/src/reading.rs` | New DOCX paragraphs/tables, XLSX sheet grids and PPTX slide-text previews offer a contained visible enhancement. These are limited content previews, not full Office rendering or macro execution. The parser has resource caps and synthetic examples, but needs aggregate decompression limits, checked arithmetic and hostile-file review before adaptation. |
+| Microsoft account recovery | `crates/net/src/oauth.rs`, `graph.rs`, account UI | Recent fixes explicitly include scopes in token requests, distinguish sign-in recovery from password prompts, and explain accounts without a mailbox. Review against our existing OAuth transport and wizard; do not replace grant/source-binding policy or assume the fix applies unchanged. |
+| Sidebar organization | `crates/ui-egui/src/nav.rs`, engine commands/preferences | Persistent collapsed groups and dragging accounts into order are good interaction candidates for our existing sidebar. Preserve the Apple styled, PC and Omarchy layouts instead of importing their navigation host. |
+| Import extensions | `crates/net/src/pst_pim.rs`, `pst.rs`, store/account integration | Notes and account-owned folder handling extend the previous PST migration candidate. Lower priority than reliable daily mail; retain our source-file preservation and bounded-import requirements. |
+
+Important integration limits remain. Ordinary Graph calendar mapping still treats missing `canEdit`
+as writable; the newly added shared-calendar branch is more conservative. The inspected Graph
+PATCH/DELETE path does not send our required conditional version checks. DAV DELETE can still proceed
+without an ETag. Reuse routing, conversions and synthetic fixtures while retaining our explicit
+permissions, source binding, conditional writes and durable review of uncertain outcomes.
+
+Recommendation: use UCS for Graph reliability and shared-mailbox authentication; use ZIDAN44 for
+incremental DAV/CardDAV, selected shared-calendar routing and document-preview prototypes. Account
+ordering is a smaller UI improvement. EWS and public folders remain a separate provider project rather
+than a shortcut to our Microsoft 365 goals. No source/assets were imported in this follow-up; any
+later copied code requires pinned provenance, retained notices and our regression tests.
+
+## Original shortlist
+
 This is a source-review shortlist for faster feature development, not a dependency approval or a
 claim of production compatibility. No third-party implementation, assets or dependencies were imported
 into MailCraft. Selected files were downloaded into ignored `target/scratch/github-reuse-review`;

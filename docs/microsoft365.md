@@ -80,9 +80,10 @@ Sheet previews: [event editor](images/microsoft365-edit-event.png), [contact edi
 ## Shared and delegated mailboxes
 
 Add your personal Graph account first, then choose Shared mailbox in Accounts. Select it as the
-principal, enter the target mailbox address, and choose shared/delegated. Sign in separately as the
-principal for that linked mailbox. Authorization settings can be inherited; access and refresh tokens
-are never copied between accounts.
+principal, enter the target mailbox address, and choose shared/delegated. By default, sign in separately
+as the principal for that linked mailbox. Graph also offers the receive-only owner-sign-in option
+described below. Authorization settings can be inherited; access and refresh tokens are never copied
+between accounts.
 
 Receive-only is the default. **Allow sending from this mailbox** opts into using that mailbox's Graph
 send endpoint. The client does not grant or discover Exchange permissions. This initial path expects
@@ -171,3 +172,46 @@ Validation uses synthetic local fixtures; live tenant behavior remains unverifie
 and recurring-series management remain future work.
 
 Form previews: [Apple styled](images/microsoft365-create-meeting-apple.png) and [Omarchy](images/microsoft365-create-meeting-omarchy.png), rendered with synthetic offline data.
+
+## Mailbox throttling
+
+Graph connections share an in-process cooldown for each endpoint and mailbox. A 429 response pauses
+subsequent requests from other connections too; a 503 with Retry-After does the same. Numeric
+Retry-After seconds are bounded to one second through 24 hours; absent or malformed values use
+60 seconds. Requests during that pause fail promptly so the interface does not wait on a sleeping
+network worker. No request is automatically replayed, including sends and other writes. Cooldowns
+are not persisted across app restarts. Foreground capacity reservation and automatic read retries
+remain future work.
+
+## Reusing the owner's sign-in
+
+Add a shared mailbox offers **Use this account’s existing sign-in** for Graph accounts
+(`accounts.addShared` with `useOwnerSignIn: true`). This opt-in mode is receive-only and requires
+the owner’s configured `Mail.ReadWrite.Shared` scope. The server still decides mailbox access.
+The child stores a stable owner account ID, never a copied access or refresh token. Requests continue
+to address the shared mailbox under `/users/{shared-address}`, not the owner mailbox.
+
+Only the owner renews its tokens. If its token is expired or near expiry, linked mailbox runs wait
+while one owner worker renews it; their plans resume after the new tokens are saved. Failed renewal
+stops linked retries until the owner signs in again or successfully renews its grant. Shared mailbox
+settings offer **Sign in again on owner account**. Cancellation drops waiting plans.
+Owner removal, address changes, endpoint changes, or removal of the
+configured shared-mail scope block the child connection. Existing independently signed-in mailboxes
+retain their behavior. This mode does not enable shared calendars, contacts, or sending, and does not
+automatically migrate existing mailboxes. Live tenant validation remains outstanding.
+
+## Preview-first mail downloads
+
+New Graph mail pages request sender, recipients, subject, date and body preview without fetching
+each message's MIME. Previews and folder progress are saved together. Opening a preview requests the
+full message and its attachments; a download button allows retry after a connection failure. Existing
+Mark to Download / Process Marked commands also work for Graph. A batch is bounded to 100 messages
+and 64 MiB of MIME; remaining marks can be processed again. Drafts still download in full.
+
+Full content keeps the item's identity, folder, read/flag state and categories, and survives undo.
+Arrival rules and
+automatic message processing run after full content arrives, rather than against an incomplete
+preview. Body search and attachment tools see downloaded content only. Reply/forward and message
+save/folder export require full content to avoid producing incomplete copies. Older delta cursors
+that lack preview fields fall back to full MIME for new messages until a new scan establishes the
+expanded field selection. No live account was used to validate these paths.

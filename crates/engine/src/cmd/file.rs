@@ -365,6 +365,11 @@ fn open_export(s: &mut Session, p: &Value) -> CmdResult {
         "exportMbox" => {
             let folder = mail_folder(s, p)?;
             let mut items: Vec<&MailItem> = s.mailbox.items_in(folder);
+            if items.iter().any(|m| graph_preview(s, m)) {
+                return Err(CmdError::Disabled(
+                    "Download full messages before exporting this folder.".into(),
+                ));
+            }
             items.sort_by_key(|m| (m.received.unix, m.id));
             let n = items.len();
             match s.store.as_ref() {
@@ -470,7 +475,18 @@ fn save_headers(m: &MailItem) -> Vec<(&'static str, String)> {
     h
 }
 
+fn graph_preview(s: &Session, m: &MailItem) -> bool {
+    crate::sync::cmds::is_header_only(s, m.id)
+        && s.mailbox
+            .folder(m.folder)
+            .and_then(|f| s.mailbox.account(f.account))
+            .is_some_and(|a| a.kind == mailcraft_model::AccountKind::Graph)
+}
+
 fn save_bytes(s: &Session, m: &MailItem, kind: &str) -> Result<Vec<u8>, CmdError> {
+    if graph_preview(s, m) {
+        return Err(CmdError::Disabled("Download the full message before saving it.".into()));
+    }
     Ok(match kind {
         "msg" => {
             let mut item = m.clone();

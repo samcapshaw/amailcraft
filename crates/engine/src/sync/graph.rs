@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Default)]
 pub(super) struct GraphJob {
+    full: Vec<String>,
     receive: bool,
     calendars: bool,
     contacts: bool,
@@ -30,6 +31,21 @@ pub(super) struct GraphJob {
 pub(super) fn build_job(s: &Session, a: &Account, plan: &Plan) -> Result<Option<GraphJob>, String> {
     let state = s.sync.prefs.data.graph.get(&a.id.0).cloned().unwrap_or_default();
     let mut job = GraphJob {
+        full: s
+            .sync
+            .fetch
+            .get(&a.id)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| {
+                let mail = s.mailbox.mail.get(id)?;
+                let folder = s.mailbox.folder(mail.folder)?;
+                (folder.account == a.id && super::cmds::is_header_only(s, *id))
+                    .then(|| mail.remote_id.clone())
+                    .flatten()
+            })
+            .take(100)
+            .collect(),
         writes: s
             .sync
             .prefs
@@ -89,8 +105,12 @@ pub(super) fn build_job(s: &Session, a: &Account, plan: &Plan) -> Result<Option<
         }
     }
     job.destroy = job.shadow.keys().filter(|id| !present.contains(*id)).cloned().collect();
-    Ok((job.receive || !job.writes.is_empty() || !job.updates.is_empty() || !job.destroy.is_empty())
-        .then_some(job))
+    Ok((job.receive
+        || !job.full.is_empty()
+        || !job.writes.is_empty()
+        || !job.updates.is_empty()
+        || !job.destroy.is_empty())
+    .then_some(job))
 }
 
 pub(super) fn run(
@@ -105,6 +125,22 @@ pub(super) fn run(
     let stopped = || cancel.load(Ordering::SeqCst);
     let result = (|| -> Result<(), NetError> {
         let client = conn.connect()?;
+        if let Some(job) = job {
+            let mut bytes = 0usize;
+            for id in &job.full {
+                if stopped() {
+                    return Ok(());
+                }
+                let raw = client.mime(id)?;
+                bytes = bytes.saturating_add(raw.len());
+                if bytes > 64 * 1024 * 1024 {
+                    return Err(NetError::TooLarge("Graph full-message download batch".into()));
+                }
+                if !events.send(Event::GraphFull { account, remote: id.clone(), raw }) {
+                    return Ok(());
+                }
+            }
+        }
         let mut write_error = None;
         if let Some(job) = job {
             for op in &job.writes {
@@ -240,6 +276,7 @@ pub(super) fn run(
 }
 /// A page is applied and journaled as a unit before its progress is persisted.
 pub(super) struct Checkpoint {
+    pub(super) previews: BTreeMap<String, Value>,
     pub(super) list: Vec<JEmail>,
     pub(super) gone: Vec<String>,
     pub(super) cursors: String,
@@ -251,6 +288,99 @@ pub(super) fn apply_checkpoint(
     page: Checkpoint,
     new_inbox: &mut Vec<mailcraft_model::ItemId>,
 ) {
+    for (remote, value) in page.previews {
+        if s.mailbox.mail.values().any(|m| {
+            m.remote_id.as_ref() == Some(&remote)
+                && s.mailbox.folder(m.folder).is_some_and(|f| f.account == account)
+        }) {
+            continue;
+        }
+        let folder = page
+            .list
+            .iter()
+            .find(|e| e.id == remote)
+            .and_then(|e| e.mailboxes.first())
+            .and_then(|name| {
+                s.mailbox
+                    .folders
+                    .values()
+                    .find(|f| f.account == account && f.remote_name.as_ref() == Some(name))
+            })
+            .map(|f| f.id);
+        let Some(folder) = folder else { continue };
+        let address = |v: &Value| -> Option<mailcraft_mime::Mailbox> {
+            let email = v.get("emailAddress")?;
+            let addr = email.get("address")?.as_str()?;
+            if addr.len() > 1024 || addr.chars().any(char::is_control) {
+                return None;
+            }
+            Some(mailcraft_mime::Mailbox {
+                addr: addr.into(),
+                name: email.get("name").and_then(Value::as_str).map(|v| v.chars().take(512).collect()),
+            })
+        };
+        let addresses = |key| {
+            value
+                .get(key)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .take(500)
+                .filter_map(address)
+                .collect()
+        };
+        let received = value
+            .get("receivedDateTime")
+            .and_then(Value::as_str)
+            .and_then(|date| {
+                super::graph_pim::utc(&serde_json::json!({"dateTime":date,"timeZone":"UTC"})).ok()
+            })
+            .unwrap_or_else(|| s.now());
+        let item = mailcraft_model::MailItem {
+            folder,
+            remote_id: Some(remote),
+            subject: value
+                .get("subject")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(4096)
+                .collect(),
+            preview: value
+                .get("bodyPreview")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(255)
+                .collect(),
+            from: value.get("from").and_then(address),
+            to: addresses("toRecipients"),
+            cc: addresses("ccRecipients"),
+            reply_to: addresses("replyTo"),
+            message_id: value
+                .get("internetMessageId")
+                .and_then(Value::as_str)
+                .map(|v| v.trim_matches(['<', '>']).chars().take(2048).collect()),
+            received,
+            ..Default::default()
+        };
+        let adopt = item.message_id.as_ref().and_then(|mid| {
+            s.mailbox
+                .mail
+                .values()
+                .find(|m| m.folder == folder && m.remote_id.is_none() && m.message_id.as_ref() == Some(mid))
+                .map(|m| m.id)
+        });
+        if let Some(id) = adopt {
+            if let Some(existing) = s.mailbox.mail.get_mut(&id) {
+                existing.remote_id = item.remote_id;
+            }
+            continue;
+        }
+        let id = s.mailbox.add_mail(item);
+        s.sync.track.created.insert(id);
+        s.sync.prefs.data.headers_only.insert(id.0);
+    }
     super::jmap::apply(s, account, JmapEvent::Emails { list: page.list }, new_inbox);
     super::jmap::apply(s, account, JmapEvent::Gone { ids: page.gone }, new_inbox);
     let state = s.sync.prefs.data.graph.entry(account.0).or_default();
@@ -314,6 +444,7 @@ fn download_mail(
             round.locations.retain(|_, source| source != &folder);
         }
         let mut list = Vec::new();
+        let mut previews = BTreeMap::new();
         for value in page.values {
             if cancel.load(Ordering::SeqCst) {
                 return Ok(());
@@ -333,7 +464,16 @@ fn download_mail(
                 stale.remove(&id);
             }
             round.locations.insert(id.clone(), folder.clone());
-            let raw = if known.contains(&id) { None } else { Some(client.mime(&id)?) };
+            let raw = if known.contains(&id) {
+                None
+            } else if value.get("subject").is_some()
+                && value.get("isDraft").and_then(Value::as_bool) != Some(true)
+            {
+                previews.insert(id.clone(), value.clone());
+                None
+            } else {
+                Some(client.mime(&id)?)
+            };
             bytes = bytes.saturating_add(raw.as_ref().map_or(0, Vec::len));
             if bytes > 64 * 1024 * 1024 {
                 return Err(NetError::TooLarge("Graph download round".into()));
@@ -401,7 +541,13 @@ fn download_mail(
         let state = serde_json::to_string(&cursors).map_err(|e| NetError::Protocol(e.to_string()))?;
         if !events.send(Event::GraphMailPage {
             account,
-            page: Box::new(Checkpoint { list, gone, cursors: state, round: (!done).then(|| round.clone()) }),
+            page: Box::new(Checkpoint {
+                previews,
+                list,
+                gone,
+                cursors: state,
+                round: (!done).then(|| round.clone()),
+            }),
         }) {
             return Ok(());
         }
@@ -471,12 +617,12 @@ mod tests {
         let next = format!("{base}/v1.0/users/owner%40example.net/continue?opaque=fixture");
         let link = next.clone();
         let thread = std::thread::spawn(move || {
-            for n in 0..3 {
+            for n in 0..2 {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
-                if n == 2 {
+                if n == 1 {
                     assert!(line.contains("continue?opaque=fixture"));
                 }
                 loop {
@@ -487,10 +633,7 @@ mod tests {
                     }
                 }
                 let (status, body) = match n {
-                    0 => (200, json!({"value":[{"id":"new-id"}],"@odata.nextLink":link}).to_string()),
-                    1 => {
-                        (200, "From: sender@example.net\r\nSubject: Recent mail\r\n\r\nSynthetic body".into())
-                    }
+                    0 => (200, json!({"value":[{"id":"new-id","subject":"Recent mail","bodyPreview":"Synthetic preview"}],"@odata.nextLink":link}).to_string()),
                     _ => (503, "{}".into()),
                 };
                 write!(
@@ -532,6 +675,8 @@ mod tests {
             })
             .unwrap();
         assert_eq!(page.list.len(), 1);
+        assert!(page.list[0].raw.is_none());
+        assert_eq!(page.previews.len(), 1);
         assert_eq!(serde_json::from_str::<BTreeMap<String, String>>(&page.cursors).unwrap()["inbox"], next);
         assert!(page.round.unwrap().pending.contains("inbox"));
         assert!(page.gone.is_empty());

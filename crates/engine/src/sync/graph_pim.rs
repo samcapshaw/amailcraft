@@ -148,7 +148,7 @@ fn strings(v: &Value, key: &str) -> Vec<String> {
 }
 /// Graph returns dateTimeTimeZone with UTC (requested in Prefer). Reject a non-UTC response rather
 /// than silently interpreting a Windows zone as the machine's zone. Fractional seconds are ignored.
-fn utc(v: &Value) -> Result<DateTime, String> {
+pub(super) fn utc(v: &Value) -> Result<DateTime, String> {
     if !matches!(v.get("timeZone").and_then(Value::as_str), Some("UTC" | "Etc/UTC")) {
         return Err("Graph event did not return the requested UTC time zone".into());
     }

@@ -4,6 +4,8 @@ use crate::{ConnectOptions, NetError, Result};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
+mod pace;
+
 pub const ENDPOINT: &str = "https://graph.microsoft.com/v1.0";
 const MAX_PAGES: usize = 1000;
 const MAX_ITEMS: usize = 100_000;
@@ -125,7 +127,12 @@ impl GraphClient {
         if let Some(etag) = etag {
             headers.push(("If-Match", etag));
         }
+        let mailbox_key = pace::key(&self.conn.endpoint, &self.conn.mailbox);
+        pace::check(&mailbox_key)?;
         let response = self.http.request(method, url, &headers, body)?;
+        if response.status == 429 || (response.status == 503 && response.header("Retry-After").is_some()) {
+            pace::pause(&mailbox_key, response.header("Retry-After"))?;
+        }
         if !response.is_success() {
             let value: Value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
             let code = value.pointer("/error/code").and_then(Value::as_str).unwrap_or("Graph request failed");
@@ -377,7 +384,7 @@ impl GraphClient {
 
     /// One message delta page. Callers checkpoint it before following the next link.
     pub fn messages_delta_page(&self, folder: &str, cursor: Option<&str>) -> Result<GraphPage> {
-        let url=cursor.map(str::to_owned).unwrap_or_else(||self.url(&format!("mailFolders/{}/messages/delta?$select=id,parentFolderId,isRead,isDraft,flag,receivedDateTime&$orderby=receivedDateTime%20desc&$top=100",percent_encode(folder))));
+        let url=cursor.map(str::to_owned).unwrap_or_else(||self.url(&format!("mailFolders/{}/messages/delta?$select=id,parentFolderId,isRead,isDraft,flag,receivedDateTime,subject,from,toRecipients,ccRecipients,replyTo,internetMessageId,bodyPreview&$orderby=receivedDateTime%20desc&$top=100",percent_encode(folder))));
         self.checked_url(&url)?;
         let bytes = self.request("GET", &url, "application/json", None)?;
         let doc: Value = serde_json::from_slice(&bytes).map_err(|e| NetError::Protocol(e.to_string()))?;
@@ -453,6 +460,34 @@ mod tests {
     use super::*;
     use crate::http::testserver::{json as response, serve};
     use serde_json::json;
+
+    #[test]
+    fn throttle_pauses_other_clients_without_replaying_send() {
+        let (base, thread, seen) = serve(1, |req| {
+            assert_eq!(req.method, "POST");
+            b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 60\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_vec()
+        });
+        let conn = GraphConn::new(
+            &format!("{base}/v1.0"),
+            "throttle@example.net",
+            "fixture",
+            ConnectOptions { allow_plaintext_auth: true, ..Default::default() },
+        )
+        .unwrap();
+        assert!(matches!(
+            conn.connect().unwrap().send_mime(b"Subject: Test\r\n\r\nTest"),
+            Err(NetError::Http { status: 429, .. })
+        ));
+        thread.join().unwrap();
+        // The fixture is closed. A second client must defer locally, not attempt a connection.
+        let other = conn.connect().unwrap();
+        assert!(matches!(other.collection("mailFolders", None), Err(NetError::Http { status: 429, .. })));
+        assert!(matches!(
+            other.send_mime(b"Subject: Test\r\n\r\nTest"),
+            Err(NetError::Http { status: 429, .. })
+        ));
+        assert_eq!(seen.try_iter().count(), 1);
+    }
 
     #[test]
     fn message_pages_stop_at_checkpoint_and_resume_opaque_url() {

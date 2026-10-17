@@ -250,6 +250,7 @@ impl Plan {
 /// What synchronisation changed, so undo keeps it (ids only; cleared when the undo history is empty).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Track {
+    bodies: BTreeSet<ItemId>,
     created: BTreeSet<ItemId>,
     removed: BTreeSet<ItemId>,
     flags: BTreeSet<ItemId>,
@@ -260,6 +261,7 @@ pub(crate) struct Track {
 impl Track {
     fn is_empty(&self) -> bool {
         self.created.is_empty()
+            && self.bodies.is_empty()
             && self.removed.is_empty()
             && self.flags.is_empty()
             && self.folders_created.is_empty()
@@ -316,6 +318,9 @@ pub struct SyncState {
     pub(crate) prefs: crate::accounts::PrefsSlot,
     /// Marked items to download in full with the account's next run.
     pub(crate) fetch: BTreeMap<AccountId, Vec<ItemId>>,
+    /// Shared mailbox plans waiting for the sole credential owner's renewal worker.
+    owner_waiters: BTreeMap<AccountId, BTreeMap<AccountId, Plan>>,
+    owner_renewal_errors: BTreeMap<AccountId, String>,
     /// Accounts whose next run downloads new messages as headers only (Download Headers).
     pub(crate) force_headers: BTreeSet<AccountId>,
     /// JMAP accounts with local changes not sent yet (they have no change queue; see `sync/jmap.rs`).
@@ -478,6 +483,12 @@ impl Session {
 
     /// Asks every busy worker to stop after its current step. Returns how many were asked.
     pub fn cancel_sync(&mut self) -> usize {
+        for child in self.sync.owner_waiters.values().flat_map(|waiters| waiters.keys()) {
+            if let Some(run) = self.sync.runs.get_mut(child) {
+                run.progress.clear();
+            }
+        }
+        self.sync.owner_waiters.clear();
         #[cfg(not(target_arch = "wasm32"))]
         {
             let busy: Vec<AccountId> =
@@ -577,6 +588,11 @@ pub(crate) fn forget_account(s: &mut Session, id: AccountId) {
     s.sync.runs.remove(&id);
     s.sync.tests.remove(&id);
     s.sync.fetch.remove(&id);
+    s.sync.owner_waiters.remove(&id);
+    for waiters in s.sync.owner_waiters.values_mut() {
+        waiters.remove(&id);
+    }
+    s.sync.owner_renewal_errors.remove(&id);
     s.sync.force_headers.remove(&id);
     s.sync.oauth.remove(&id);
     #[cfg(not(target_arch = "wasm32"))]
@@ -1303,7 +1319,11 @@ pub(crate) fn after_restore(s: &mut Session, live: &Mailbox) {
     // Internet calendars keep their last refresh (refreshes are not undo steps).
     crate::cmd::calendar::subscribe::carry_over(live, &mut s.mailbox);
     graph_pim::carry_over(live, &mut s.mailbox);
-    if !live.accounts.iter().any(|a| a.kind == AccountKind::Imap) {
+    if !live
+        .accounts
+        .iter()
+        .any(|a| matches!(a.kind, AccountKind::Imap | AccountKind::Jmap | AccountKind::Graph))
+    {
         return;
     }
     carry_over(live, &mut s.mailbox, &s.sync.track);
@@ -1368,6 +1388,25 @@ fn carry_over(live: &Mailbox, restored: &mut Mailbox, track: &Track) {
     }
     for (id, m) in restored.mail.iter_mut() {
         let Some(l) = live.mail.get(id) else { continue };
+        if track.bodies.contains(id) {
+            m.body = l.body.clone();
+            m.raw = l.raw.clone();
+            m.blob = l.blob.clone();
+            m.attachments = l.attachments.clone();
+            m.preview = l.preview.clone();
+            m.size = l.size;
+            m.subject = l.subject.clone();
+            m.from = l.from.clone();
+            m.sender = l.sender.clone();
+            m.to = l.to.clone();
+            m.cc = l.cc.clone();
+            m.bcc = l.bcc.clone();
+            m.sent = l.sent;
+            m.reply_to = l.reply_to.clone();
+            m.message_id = l.message_id.clone();
+            m.references = l.references.clone();
+            m.in_reply_to = l.in_reply_to.clone();
+        }
         if l.folder == m.folder {
             m.remote_id = l.remote_id.clone();
         }

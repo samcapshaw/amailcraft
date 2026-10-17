@@ -43,6 +43,8 @@ pub struct ServerSettings {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LinkedMailbox {
+    /// Explicit Graph credential owner. None preserves independently authorized legacy mailboxes.
+    pub credential_owner: Option<AccountId>,
     pub principal_address: String,
     pub delegated: bool,
     /// Allow sending as this mailbox. Receive-only is the conservative default.

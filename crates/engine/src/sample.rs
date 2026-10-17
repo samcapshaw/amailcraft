@@ -675,6 +675,7 @@ pub fn mac_sample_mailbox(now: DateTime) -> Mailbox {
                 principal_address: SAMPLE_USER_ADDR.into(),
                 delegated,
                 send_as: false,
+                credential_owner: None,
             }),
             ..Default::default()
         });

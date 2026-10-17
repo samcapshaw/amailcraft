@@ -1473,6 +1473,22 @@ fn more_settings(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) {
 fn oauth_section(ui: &mut Ui, app: &mut App, st: &mut Wizard, uid: u64) -> Option<String> {
     let mut open_url = None;
     if let Some(link) = st.change.and_then(|id| account_of(app, id)).and_then(|a| a.linked_mailbox) {
+        if link.credential_owner.is_some() {
+            muted(
+                ui,
+                app,
+                &format!(
+                    "Uses {}’s existing sign-in. Renew it in that account’s settings.",
+                    link.principal_address
+                ),
+            );
+            if ui.button("Sign in again on owner account…").clicked()
+                && let Some(owner) = link.credential_owner
+            {
+                app.ui.dialogs.push(("addAccount".into(), json!({"change":owner.0})));
+            }
+            return None;
+        }
         ui.label(format!("Sign in as {} to open this mailbox.", link.principal_address));
     }
     let flat = st.graph && setup::polished(app);
@@ -2107,6 +2123,7 @@ struct SharedMailboxForm {
     name: String,
     delegated: bool,
     send_as: bool,
+    use_owner_sign_in: bool,
     error: String,
 }
 
@@ -2193,10 +2210,20 @@ fn shared_mailbox(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                 });
                 let graph =
                     st.owner.and_then(|id| account_of(app, id)).is_some_and(|a| a.kind == AccountKind::Graph);
-                ui.checkbox(
-                    &mut st.send_as,
-                    if graph { "Allow sending from this mailbox" } else { "Send as this mailbox" },
-                );
+                if graph {
+                    ui.checkbox(&mut st.use_owner_sign_in, "Use this account’s existing sign-in");
+                } else {
+                    st.use_owner_sign_in = false;
+                }
+                if st.use_owner_sign_in {
+                    st.send_as = false;
+                }
+                ui.add_enabled_ui(!st.use_owner_sign_in, |ui| {
+                    ui.checkbox(
+                        &mut st.send_as,
+                        if graph { "Allow sending from this mailbox" } else { "Send as this mailbox" },
+                    );
+                });
                 muted(
                     ui,
                     app,
@@ -2210,7 +2237,11 @@ fn shared_mailbox(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                 muted(
                     ui,
                     app,
-                    "Next: sign in as yourself in the account's OAuth section. Each mailbox keeps its own authorization; no passwords or tokens are copied.",
+                    if st.use_owner_sign_in {
+                        "Receive-only. Uses the owner’s shared-mail permissions without storing another token. Refresh the owner account first when its sign-in expires."
+                    } else {
+                        "Next: sign in as yourself in the account's OAuth section. Each mailbox keeps its own authorization; no passwords or tokens are copied."
+                    },
                 );
                 if !st.error.is_empty() {
                     ui.colored_label(app.theme.danger, &st.error);
@@ -2227,10 +2258,12 @@ fn shared_mailbox(ctx: &Context, app: &mut App, d: &Dlg<'_>) -> Out {
                         match try_run(
                             app,
                             "accounts.addShared",
-                            json!({"account": st.owner, "address": st.address.trim(), "displayName": name, "delegated": st.delegated, "sendAs": st.send_as}),
+                            json!({"account": st.owner, "address": st.address.trim(), "displayName": name, "delegated": st.delegated, "sendAs": st.send_as, "useOwnerSignIn": st.use_owner_sign_in}),
                         ) {
                             Ok(v) => {
-                                if let Some(id) = v.get("account").and_then(Value::as_u64) {
+                                if v.get("requiresSignIn").and_then(Value::as_bool) == Some(false) {
+                                    out = Out::Close;
+                                } else if let Some(id) = v.get("account").and_then(Value::as_u64) {
                                     out = Out::close_open("addAccount", json!({"change": id}));
                                 }
                             }

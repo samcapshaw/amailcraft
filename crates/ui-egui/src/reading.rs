@@ -568,6 +568,26 @@ fn empty_state(ui: &mut Ui, app: &mut App) {
 
 /// Header + body of one message (reading pane or read window).
 fn message_view(ui: &mut Ui, app: &mut App, id: u64, surface: Surface, narrow: bool) {
+    if mailcraft_engine::sync::cmds::is_header_only(&app.s, ItemId(id))
+        && app
+            .s
+            .mailbox
+            .mail
+            .get(&ItemId(id))
+            .and_then(|m| app.s.mailbox.folder(m.folder))
+            .and_then(|f| app.s.mailbox.account(f.account))
+            .is_some_and(|a| a.kind == mailcraft_model::AccountKind::Graph)
+    {
+        let key = Id::new(("graph-preview-auto-download", id));
+        let first = ui.ctx().data(|data| data.get_temp::<bool>(key)) != Some(true);
+        let retry = ui.button("Download full message and attachments").clicked();
+        if first || retry {
+            ui.ctx().data_mut(|data| data.insert_temp(key, true));
+            app.run("sendReceive.markToDownload", json!({"ids":[id],"copy":true}));
+            app.run("sendReceive.processMarked", json!({"allFolders":true}));
+        }
+        ui.label("Message preview is available. Full content downloads when connected.");
+    }
     let Some(h) = queries::reading_header(&app.s, ItemId(id)) else {
         empty_state(ui, app);
         return;

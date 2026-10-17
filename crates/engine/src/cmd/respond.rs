@@ -106,6 +106,16 @@ fn respond(s: &mut Session, p: &Value, kind: ComposeKind) -> CmdResult {
         return Err(CmdError::Disabled("No message is selected.".into()));
     };
     let inline = !opt_bool(p, "window").unwrap_or(false);
+    if crate::sync::cmds::is_header_only(s, id)
+        && s.mailbox
+            .mail
+            .get(&id)
+            .and_then(|m| s.mailbox.folder(m.folder))
+            .and_then(|f| s.mailbox.account(f.account))
+            .is_some_and(|a| a.kind == mailcraft_model::AccountKind::Graph)
+    {
+        return Err(CmdError::Disabled("Download the full message before replying or forwarding.".into()));
+    }
     let Some(c) = build_response(s, id, kind, inline) else {
         return Err(CmdError::Failed("message not found".into()));
     };
@@ -316,6 +326,16 @@ fn original_attachment(m: &MailItem) -> ComposeAttachment {
 /// prefaced comments, proofing of the original, where the sent copy of a forward or of a reply to a message
 /// outside the Inbox is saved.
 pub fn build_response(s: &Session, id: ItemId, kind: ComposeKind, inline: bool) -> Option<ComposeState> {
+    if crate::sync::cmds::is_header_only(s, id)
+        && s.mailbox
+            .mail
+            .get(&id)
+            .and_then(|m| s.mailbox.folder(m.folder))
+            .and_then(|f| s.mailbox.account(f.account))
+            .is_some_and(|a| a.kind == mailcraft_model::AccountKind::Graph)
+    {
+        return None;
+    }
     let m = s.mailbox.mail.get(&id)?;
     let forward = kind == ComposeKind::Forward;
     let st = &s.settings;
@@ -402,6 +422,19 @@ fn eml_name(subject: &str) -> String {
 /// subject is "FW: " + the first message's subject.
 fn forward_as_attachment(s: &mut Session, p: &Value) -> CmdResult {
     let ids = super::mail::mail_targets(s, p);
+    if ids.iter().any(|id| {
+        crate::sync::cmds::is_header_only(s, *id)
+            && s.mailbox
+                .mail
+                .get(id)
+                .and_then(|m| s.mailbox.folder(m.folder))
+                .and_then(|f| s.mailbox.account(f.account))
+                .is_some_and(|a| a.kind == mailcraft_model::AccountKind::Graph)
+    }) {
+        return Err(CmdError::Disabled(
+            "Download full messages before forwarding them as attachments.".into(),
+        ));
+    }
     let Some(first) = ids.first().copied() else {
         return Err(CmdError::Disabled("No message is selected.".into()));
     };

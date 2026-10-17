@@ -888,7 +888,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "accounts.addShared",
             "Add shared or delegated mailbox",
-            r#"{"account": number|string (OAuth IMAP or Graph delegate), "address": string, "displayName"?: string, "delegated"?: bool, "sendAs"?: bool} (creates a mailbox requiring its own OAuth sign-in as the delegate; grants no server permissions)"#,
+            r#"{"account": number|string (OAuth IMAP or Graph delegate), "address": string, "displayName"?: string, "delegated"?: bool, "sendAs"?: bool, "useOwnerSignIn"?: bool} (owner sign-in is receive-only Graph; otherwise requires independent sign-in; grants no server permissions)"#,
             true,
             has_server_account,
             add_shared,
@@ -1330,7 +1330,7 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// OAuth shared IMAP uses the target mailbox as SASL user and a delegate's independently granted token.
-/// Never copy a refresh token: each mailbox signs in separately, avoiding rotating-token races.
+/// Never copy a refresh token. Graph may explicitly borrow its owner's access token.
 fn add_shared(s: &mut Session, p: &Value) -> CmdResult {
     load_prefs(s);
     if s.mailbox.accounts.len() >= MAX_ACCOUNTS {
@@ -1361,6 +1361,21 @@ fn add_shared(s: &mut Session, p: &Value) -> CmdResult {
     incoming.username = address.clone();
     incoming.auth = if a.kind == AccountKind::Graph { "BEARER" } else { "XOAUTH2" }.into();
     let send_as = opt_bool(p, "sendAs").unwrap_or(false);
+    let reuse = opt_bool(p, "useOwnerSignIn").unwrap_or(false);
+    if reuse {
+        graph_credential_owner(s, &a)?;
+        if a.kind != AccountKind::Graph || send_as {
+            return Err(CmdError::Params(
+                "Owner sign-in currently supports receive-only Graph mailboxes.".into(),
+            ));
+        }
+        let scopes = account_options(s, owner).oauth.map(|b| b.scopes).unwrap_or_default();
+        if !scopes.iter().any(|scope| scope == "https://graph.microsoft.com/Mail.ReadWrite.Shared") {
+            return Err(CmdError::Params(
+                "Sign in to the owner account with Microsoft 365 shared-mail permissions first.".into(),
+            ));
+        }
+    }
     let outgoing = if send_as {
         a.outgoing.clone().map(|mut server| {
             server.username = address.clone();
@@ -1382,18 +1397,55 @@ fn add_shared(s: &mut Session, p: &Value) -> CmdResult {
             principal_address: a.address.clone(),
             delegated: opt_bool(p, "delegated").unwrap_or(false),
             send_as,
+            credential_owner: reuse.then_some(owner),
         }),
         ..Default::default()
     });
     s.mailbox.create_default_folders(id);
     let mut opts = account_options(s, owner);
+    if reuse {
+        opts.graph_calendars = false;
+        opts.graph_contacts = false;
+        opts.graph_editing = false;
+    }
     if let Some(binding) = &mut opts.oauth {
         binding.expires_at = None;
     }
     opts.address = address.clone();
     update_options(s, id, |o| *o = opts);
     s.refresh_me();
-    Ok(json!({"account": id.0, "address": address, "signInAs": a.address, "requiresSignIn": true}))
+    Ok(json!({"account": id.0, "address": address, "signInAs": a.address, "requiresSignIn": !reuse}))
+}
+
+/// Resolve only an explicit, stable owner ID, never a matching address or a chain of delegates.
+pub(crate) fn graph_credential_owner(s: &Session, account: &Account) -> Result<AccountId, CmdError> {
+    let Some(owner) = account.linked_mailbox.as_ref().and_then(|link| link.credential_owner) else {
+        return Ok(account.id);
+    };
+    let parent = s.mailbox.account(owner).ok_or_else(|| {
+        CmdError::Failed("The mailbox's sign-in account was removed. Add the mailbox again.".into())
+    })?;
+    if !account_options(s, owner).oauth.is_some_and(|binding| {
+        binding.scopes.iter().any(|scope| scope == "https://graph.microsoft.com/Mail.ReadWrite.Shared")
+    }) {
+        return Err(CmdError::Failed(
+            "Sign in to the owner account with Microsoft 365 shared-mail permissions first.".into(),
+        ));
+    }
+    let link =
+        account.linked_mailbox.as_ref().ok_or_else(|| CmdError::Failed("Missing mailbox owner".into()))?;
+    if owner == account.id
+        || account.kind != AccountKind::Graph
+        || parent.kind != AccountKind::Graph
+        || parent.linked_mailbox.is_some()
+        || parent.credential != CredentialKind::OAuthToken
+        || !parent.address.eq_ignore_ascii_case(&link.principal_address)
+        || parent.incoming.as_ref().map(|v| &v.host) != account.incoming.as_ref().map(|v| &v.host)
+        || link.send_as
+    {
+        return Err(CmdError::Failed("The mailbox's sign-in account changed. Add the mailbox again.".into()));
+    }
+    Ok(owner)
 }
 
 fn edit(s: &mut Session, p: &Value) -> CmdResult {
@@ -1748,6 +1800,11 @@ fn oauth_sign_in(s: &mut Session, p: &Value) -> CmdResult {
     };
     if a.kind == AccountKind::Local {
         return Err(CmdError::Disabled("a data file has no mail server".into()));
+    }
+    if a.linked_mailbox.as_ref().is_some_and(|link| link.credential_owner.is_some()) {
+        return Err(CmdError::Params(
+            "This mailbox uses its owner's sign-in. Sign in on the owner account instead.".into(),
+        ));
     }
     let binding = oauth_binding(p)?;
     if a.kind == AccountKind::Graph {
@@ -2144,6 +2201,50 @@ mod tests {
 #[cfg(test)]
 mod shared_mailbox_tests {
     use super::*;
+    #[test]
+    fn owner_sign_in_is_explicit_and_survives_without_copied_secrets() {
+        let (mut s, owner) = fixture();
+        let parent = s.mailbox.accounts.iter_mut().find(|a| a.id == owner).unwrap();
+        parent.kind = AccountKind::Graph;
+        parent.incoming.as_mut().unwrap().host = mailcraft_net::graph::ENDPOINT.into();
+        parent.outgoing = None;
+        update_options(&mut s, owner, |o| {
+            let binding = o.oauth.as_mut().unwrap();
+            binding.scopes = vec!["https://graph.microsoft.com/Mail.ReadWrite.Shared".into()];
+            binding.expires_at = None;
+        });
+        let args = json!({"account":owner.0,"address":"shared@example.net","useOwnerSignIn":true});
+        let result = s.run("accounts.addShared", &args).unwrap();
+        let id = AccountId(result["account"].as_u64().unwrap() as u32);
+        assert_eq!(result["requiresSignIn"], false);
+        let child = s.mailbox.account(id).unwrap().clone();
+        assert_eq!(graph_credential_owner(&s, &child).unwrap(), owner);
+        assert!(!child.can_send());
+        assert!(account_secret(&s, id, false).is_none());
+        assert!(s.secrets.get(&refresh_key(id)).is_none());
+        assert!(s.run("accounts.oauthSignIn", &json!({"account":id.0})).is_err());
+        s.mailbox.accounts.iter_mut().find(|a| a.id == owner).unwrap().address = "changed@example.net".into();
+        assert!(graph_credential_owner(&s, &child).is_err());
+        s.mailbox.accounts.retain(|a| a.id != owner);
+        assert!(graph_credential_owner(&s, &child).is_err());
+    }
+
+    #[test]
+    fn owner_sign_in_rejects_wrong_transport_missing_consent_and_sending() {
+        let (mut s, owner) = fixture();
+        let args = json!({"account":owner.0,"address":"shared@example.net","useOwnerSignIn":true});
+        assert!(s.run("accounts.addShared", &args).is_err());
+        s.mailbox.accounts.iter_mut().find(|a| a.id == owner).unwrap().kind = AccountKind::Graph;
+        assert!(s.run("accounts.addShared", &args).is_err());
+        update_options(&mut s, owner, |o| {
+            o.oauth.as_mut().unwrap().scopes =
+                vec!["https://graph.microsoft.com/Mail.ReadWrite.Shared".into()]
+        });
+        let mut sending = args.clone();
+        sending["sendAs"] = json!(true);
+        assert!(s.run("accounts.addShared", &sending).is_err());
+    }
+
     fn fixture() -> (Session, AccountId) {
         let mut s = Session::new(mailcraft_model::Mailbox::new_local("Local"));
         let server = ServerSettings {
