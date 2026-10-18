@@ -488,6 +488,142 @@ fn note_window_colours_and_saves() {
     assert_eq!(h.state().s.mailbox.notes[&id].color, mailcraft_model::NoteColor::Pink);
 }
 
+#[test]
+fn meeting_note_preview_checks_and_pin_are_saved() {
+    let mut a = app();
+    let value = a.s.run("notes.new", &json!({"template":"meeting"})).unwrap();
+    let id = ItemId(value["id"].as_u64().unwrap());
+    let mut h = harness(super::notes, a, (1400.0, 1000.0));
+    let mut state = super::common::load(&h.ctx);
+    super::editors::open_note(h.state(), &mut state, id);
+    super::common::store(&h.ctx, state);
+    h.run_ok();
+    click(&h, "Preview");
+    h.run_ok();
+    assert!(has(&h, "Decisions"));
+    click(&h, "Owner · Action · Due date");
+    click(&h, "Pinned");
+    click(&h, "Save & Close");
+    h.run_ok();
+    let note = &h.state().s.mailbox.notes[&id];
+    assert!(note.markdown && note.pinned);
+    assert!(note.text.contains("- [x] Owner · Action · Due date"));
+}
+
+#[test]
+fn desktop_notes_workspace_creates_blocks_and_nested_pages() {
+    let mut a = app();
+    a.enable_mac_style();
+    let value = a.s.run("notes.new", &json!({"template":"meeting"})).unwrap();
+    let id = ItemId(value["id"].as_u64().unwrap());
+    let folder = a.s.mailbox.notes[&id].folder;
+    super::common::select_folder(&mut a, folder);
+    a.ui.module_selection = Some(id.0);
+    let mut h = harness(super::notes, a, (1400.0, 1000.0));
+    assert!(has(&h, "Notebooks"));
+    assert!(has(&h, "Search pages"));
+    assert!(has(&h, "Page title"));
+    assert!(!has(&h, "+ To-do"));
+    click(&h, "+ Add to page");
+    h.run_ok();
+    assert!(has(&h, "Track an action with a checkbox"));
+    click(&h, "To-do list");
+    h.run_ok();
+    assert_eq!(
+        h.state().s.mailbox.notes[&id].blocks.last().unwrap().kind,
+        mailcraft_model::note::NoteBlockKind::Checklist
+    );
+    h.query_all_by_label("Block text").last().unwrap().type_text("Review the design");
+    h.run_ok();
+    assert!(h.state().s.mailbox.notes[&id].text.contains("Review the design"));
+    h.get_by_label("Meeting notes").click_secondary();
+    h.run_ok();
+    click(&h, "Add subpage");
+    h.run_ok();
+    assert!(h.state().s.mailbox.notes.values().any(|note| note.parent == Some(id)));
+}
+
+#[test]
+fn notes_template_gallery_creates_a_styled_daily_page() {
+    let mut a = app();
+    a.enable_mac_style();
+    let mut h = harness(super::notes, a, (1400.0, 1000.0));
+    assert!(has(&h, "Make room for your next idea"));
+    assert!(has(&h, "Find a template"));
+    let title_bounds = h.get_by_label("Daily planner").rect();
+    let action_bounds = h.get_by_label("Use Daily planner").rect();
+    assert!((title_bounds.left() - action_bounds.left()).abs() < 2.0, "Card content must stack vertically");
+    assert!(action_bounds.width() > 200.0);
+    click(&h, "Use Daily planner");
+    h.run_ok();
+    let id = ItemId(h.state().ui.module_selection.unwrap());
+    assert_eq!(mailcraft_engine::cmd::notes::title(&h.state().s.mailbox.notes[&id]), "Daily planner");
+    assert!(!has(&h, "Page style"));
+    h.get_by_label("Daily planner").click_secondary();
+    h.run_ok();
+    assert!(has_part(&h, "Page style"));
+    h.query_all_by_label_contains("Page style").next().unwrap().click();
+    h.run_ok();
+    click(&h, "Dotted");
+    h.run_ok();
+    assert_eq!(h.state().s.mailbox.notes[&id].paper, mailcraft_model::note::NotePaper::Dotted);
+}
+
+#[test]
+fn notes_habit_template_checks_and_custom_template_gallery() {
+    let mut a = app();
+    a.enable_mac_style();
+    let result = a.s.run("notes.new", &json!({"template":"habits"})).unwrap();
+    let id = ItemId(result["id"].as_u64().unwrap());
+    let folder = a.s.mailbox.notes[&id].folder;
+    super::common::select_folder(&mut a, folder);
+    a.ui.module_selection = Some(id.0);
+    let mut h = harness(super::notes, a, (1400.0, 1000.0));
+    click(&h, "Move your body, Mon");
+    h.run_ok();
+    let first_days = h.state().s.mailbox.notes[&id].blocks[0].habits[0].days.clone();
+    click(&h, "‹");
+    h.run_ok();
+    click(&h, "Move your body, Mon");
+    h.run_ok();
+    let days = &h.state().s.mailbox.notes[&id].blocks[0].habits[0].days;
+    assert_eq!(days.len(), 2);
+    assert!(first_days.iter().all(|d| days.contains(d)));
+    click(&h, "This week");
+    h.run_ok();
+
+    assert!(
+        h.state().s.mailbox.notes[&id]
+            .blocks
+            .iter()
+            .any(|b| b.kind == mailcraft_model::note::NoteBlockKind::Habits
+                && b.habits.iter().any(|h| !h.days.is_empty()))
+    );
+    h.get_by_label("Habit tracker").click_secondary();
+    h.run_ok();
+    assert!(has_part(&h, "Save as template"));
+    h.query_all_by_label_contains("Save as template").next().unwrap().click();
+    h.run_ok();
+    click(&h, "Template name");
+    h.run_ok();
+    assert!(h.get_by_label("Template name").is_focused());
+    h.get_by_label("Template name").type_text(" reusable");
+    h.run_ok();
+    assert!(h.get_by_label("Template name").value().unwrap_or_default().contains("reusable"));
+    click(&h, "Save template");
+    h.run_ok();
+    assert!(has(&h, "Yours"));
+    assert!(
+        h.state()
+            .s
+            .mailbox
+            .notes
+            .values()
+            .any(|n| n.is_template && mailcraft_engine::cmd::notes::title(n).contains("reusable"))
+    );
+    assert!(h.state().s.mailbox.notes.values().any(|n| n.is_template));
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Module views (view.changeView and friends), module actions and dialogs
 // ---------------------------------------------------------------------------------------------------------
@@ -933,4 +1069,254 @@ ATTENDEE;CN=\"Ann Lee\";PARTSTAT=IN-PROCESS:mailto:ann@example.com\r\nEND:VTODO\
     let t = &h.state().s.mailbox.tasks[&copy];
     assert_eq!(t.percent_complete, 40);
     assert_eq!(t.request_state, mailcraft_model::task::TaskRequestState::Accepted);
+}
+
+#[test]
+fn notes_live_task_block_completes_real_task() {
+    let mut a = app();
+    a.enable_mac_style();
+    let task = a.s.run("tasks.new", &json!({"subject":"Finish benchmark","due":"2026-10-09"})).unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let page=a.s.run("notes.new",&json!({"text":"Live task test","blocks":[{"id":1,"kind":"tasks","text":"Due soon","day_offset":7}]})).unwrap()["id"].as_u64().unwrap();
+    let folder = a.s.mailbox.notes[&ItemId(page)].folder;
+    super::common::select_folder(&mut a, folder);
+    a.ui.module_selection = Some(page);
+    let mut h = harness(super::notes, a, (1400.0, 1000.0));
+    click(&h, "Finish benchmark");
+    h.run_ok();
+    assert!(h.state().s.mailbox.tasks[&ItemId(task)].is_complete());
+    assert!(!has(&h, "Finish benchmark"));
+}
+
+#[test]
+fn notes_weekly_columns_stack_and_keep_content_discoverable() {
+    for width in [1400.0, 850.0] {
+        let mut a = app();
+        a.enable_mac_style();
+        let page = a.s.run("notes.new", &json!({"template":"weekly"})).unwrap()["id"].as_u64().unwrap();
+        let folder = a.s.mailbox.notes[&ItemId(page)].folder;
+        super::common::select_folder(&mut a, folder);
+        a.ui.module_selection = Some(page);
+        let h = harness(super::notes, a, (width, 1200.0));
+        assert!(has(&h, "Section title"));
+        assert!(has(&h, "+ Add habit"));
+        assert!(has(&h, "+ Two columns"));
+        assert!(has_part(&h, "Team stand-up"));
+        let today = h
+            .query_all_by_label("Section title")
+            .find(|n| n.value().as_deref() == Some("Today"))
+            .unwrap()
+            .rect();
+        let priorities = h
+            .query_all_by_label("Block text")
+            .find(|n| n.value().as_deref() == Some("Top three"))
+            .unwrap()
+            .rect();
+        if width > 1000.0 {
+            let habits = h
+                .query_all_by_label("Section title")
+                .find(|n| n.value().as_deref() == Some("Habits"))
+                .unwrap()
+                .rect();
+            let first = h.get_by_label("Move your body, Mon").rect();
+            let second = h.get_by_label("Read a little, Mon").rect();
+            assert!(first.top() - habits.bottom() < 120.0, "Habit controls must stay near their heading");
+            assert!(second.top() - first.top() < 60.0, "Habit rows must stay compact");
+            assert!(priorities.left() > today.left() + 200.0);
+        } else {
+            assert!((priorities.left() - today.left()).abs() < 4.0);
+            assert!(priorities.top() > today.bottom());
+        }
+    }
+}
+
+#[test]
+fn notes_drag_moves_block_into_destination_column() {
+    let mut a = app();
+    a.enable_mac_style();
+    let page =
+        a.s.run(
+            "notes.new",
+            &json!({"text":"Columns","blocks":[
+                {"id":1,"section":1,"column":0,"kind":"paragraph","text":"Left text"},
+                {"id":2,"section":1,"column":1,"kind":"paragraph","text":"Right text"},
+                {"id":3,"kind":"paragraph","text":"Below text"}
+            ]}),
+        )
+        .unwrap()["id"]
+            .as_u64()
+            .unwrap();
+    let folder = a.s.mailbox.notes[&ItemId(page)].folder;
+    super::common::select_folder(&mut a, folder);
+    a.ui.module_selection = Some(page);
+    let mut h = harness(super::notes, a, (1400.0, 1000.0));
+    let grip = h.get_by_label("Move block 3").rect().center();
+    let target = h
+        .query_all_by_label("Block text")
+        .find(|n| n.value().as_deref() == Some("Right text"))
+        .unwrap()
+        .rect()
+        .center();
+    h.hover_at(grip);
+    h.run_ok();
+    h.drag_at(grip);
+    h.run_ok();
+    h.hover_at(target);
+    h.run_ok();
+    h.drop_at(target);
+    h.run_ok();
+    let blocks = &h.state().s.mailbox.notes[&ItemId(page)].blocks;
+    assert_eq!(blocks.iter().map(|b| b.id).collect::<Vec<_>>(), vec![1, 3, 2]);
+    assert_eq!((blocks[1].section, blocks[1].column), (1, 1));
+}
+
+#[test]
+fn notes_context_actions_target_clicked_page_and_work_in_search() {
+    let mut a = app();
+    a.enable_mac_style();
+    let active = a.s.run("notes.new", &json!({"text":"Reading page"})).unwrap()["id"].as_u64().unwrap();
+    let target = a.s.run("notes.new", &json!({"text":"Other page"})).unwrap()["id"].as_u64().unwrap();
+    let folder = a.s.mailbox.notes[&ItemId(active)].folder;
+    super::common::select_folder(&mut a, folder);
+    a.ui.module_selection = Some(active);
+    let mut h = harness(super::notes, a, (1400.0, 1000.0));
+    assert!(!has(&h, "Page options"));
+    click(&h, "More options for Other page");
+    h.run_ok();
+    assert!(h.get_by_label("Rename").rect().height() >= 32.0);
+    click(&h, "Add to favourites");
+    h.run_ok();
+    assert!(h.state().s.mailbox.notes[&ItemId(target)].pinned);
+    assert!(!h.state().s.mailbox.notes[&ItemId(active)].pinned);
+    assert_eq!(h.state().ui.module_selection, Some(active));
+    assert_eq!(h.state().s.selection.focus, Some(ItemId(active)));
+    click(&h, "Search pages");
+    h.run_ok();
+    h.get_by_label("Search pages").type_text("Other page");
+    h.run_ok();
+    h.get_by_label("Other page").click_secondary();
+    h.run_ok();
+    click(&h, "Rename");
+    h.run_ok();
+    assert_eq!(h.state().ui.module_selection, Some(target));
+    assert_eq!(h.state().s.selection.focus, Some(ItemId(target)));
+    assert!(h.get_by_label("Page title").is_focused());
+    h.get_by_label("Page title").type_text("Renamed page");
+    h.run_ok();
+    assert_eq!(
+        mailcraft_engine::cmd::notes::title(&h.state().s.mailbox.notes[&ItemId(target)]),
+        "Renamed page"
+    );
+    assert_eq!(
+        mailcraft_engine::cmd::notes::title(&h.state().s.mailbox.notes[&ItemId(active)]),
+        "Reading page"
+    );
+}
+
+#[test]
+fn notes_breadcrumb_navigation_and_history_follow_actual_pages() {
+    let mut a = app();
+    a.enable_mac_style();
+    let parent = a.s.run("notes.new", &json!({"text":"Project home"})).unwrap()["id"].as_u64().unwrap();
+    let child = a.s.run("notes.new", &json!({"text":"Meeting page"})).unwrap()["id"].as_u64().unwrap();
+    let other = a.s.run("notes.new", &json!({"text":"Reference page"})).unwrap()["id"].as_u64().unwrap();
+    a.s.run("notes.reparent", &json!({"id":child,"parent":parent})).unwrap();
+    let folder = a.s.mailbox.notes[&ItemId(child)].folder;
+    super::common::select_folder(&mut a, folder);
+    a.ui.module_selection = Some(child);
+    let mut h = harness(super::notes, a, (1400.0, 1000.0));
+    h.query_all_by_label("Project home").last().unwrap().click();
+    h.run_ok();
+    assert_eq!(h.state().ui.module_selection, Some(parent));
+    click(&h, "Back to previous page");
+    h.run_ok();
+    assert_eq!(h.state().ui.module_selection, Some(child));
+    click(&h, "Forward to next page");
+    h.run_ok();
+    assert_eq!(h.state().ui.module_selection, Some(parent));
+    click(&h, "Reference page");
+    h.run_ok();
+    assert_eq!(h.state().ui.module_selection, Some(other));
+    h.state_mut().s.run("notes.delete", &json!({"id":parent})).unwrap();
+    click(&h, "Back to previous page");
+    h.run_ok();
+    assert_eq!(h.state().ui.module_selection, Some(child));
+    assert_eq!(h.state().s.selection.focus, Some(ItemId(child)));
+}
+
+#[test]
+fn notes_workspace_features_are_available_in_every_desktop_profile() {
+    for profile in ["apple", "outlook", "omarchy"] {
+        let mut a = app();
+        a.s.run("options.set", &json!({"key":"general.interface","value":profile})).unwrap();
+        a.enable_desktop_themes();
+        assert_eq!(a.mac_style, profile != "outlook");
+        let mut h = harness(super::notes, a, (1400.0, 1000.0));
+        assert!(has(&h, "Find a template"), "{profile}");
+        click(&h, "Use Daily planner");
+        h.run_ok();
+        assert!(has(&h, "Page title"), "{profile}");
+        assert!(has(&h, "Back to previous page"), "{profile}");
+        let id = ItemId(h.state().ui.module_selection.unwrap());
+        let title = mailcraft_engine::cmd::notes::title(&h.state().s.mailbox.notes[&id]);
+        click(&h, &format!("More options for {title}"));
+        h.run_ok();
+        assert!(has(&h, "Add subpage"), "{profile}");
+        assert!(has_part(&h, "Page style"), "{profile}");
+        click(&h, "Add subpage");
+        h.run_ok();
+        assert!(h.state().s.mailbox.notes.values().any(|n| n.parent == Some(id)), "{profile}");
+        assert!(has(&h, "Page title"), "{profile}");
+    }
+}
+
+#[test]
+fn notes_slash_insertion_and_selected_text_formatting_work_in_pc() {
+    let mut a = app();
+    a.s.run("options.set", &json!({"key":"general.interface","value":"outlook"})).unwrap();
+    a.enable_desktop_themes();
+    let id=ItemId(a.s.run("notes.new",&json!({"text":"Writing","markdown":true,"blocks":[{"id":1,"kind":"paragraph","text":"Café launch"}]})).unwrap()["id"].as_u64().unwrap());
+    a.ui.module_selection = Some(id.0);
+    let mut h = harness(super::notes, a, (1400.0, 1000.0));
+    let editor = egui::Id::new(("note-block", id.0, 1u64));
+    h.get_by_label("Block text").click();
+    h.run_ok();
+    let mut state = egui::TextEdit::load_state(&h.ctx, editor).unwrap();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+        egui::text::CCursor::new(0),
+        egui::text::CCursor::new(4),
+    )));
+    state.store(&h.ctx, editor);
+    h.ctx.request_repaint();
+    h.run_ok();
+    assert!(
+        has(&h, "Bold"),
+        "focus={:?}, blocks={:?}",
+        h.ctx.memory(|m| m.focused()),
+        h.state().s.mailbox.notes[&id].blocks
+    );
+    click(&h, "Bold");
+    h.run_ok();
+    assert!(
+        h.state().s.mailbox.notes[&id].blocks[0].inline.iter().any(|r| r.start == 0 && r.end == 4 && r.bold)
+    );
+    // Replace the entire paragraph with a slash query, then insert using the keyboard.
+    h.ctx.memory_mut(|m| m.request_focus(editor));
+    let mut state = egui::TextEdit::load_state(&h.ctx, editor).unwrap();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+        egui::text::CCursor::new(0),
+        egui::text::CCursor::new(11),
+    )));
+    state.store(&h.ctx, editor);
+    h.ctx.request_repaint();
+    h.run_ok();
+    h.get_by_label("Block text").type_text("/heading");
+    h.run_ok();
+    assert!(has(&h, "Insert block"));
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    let block = &h.state().s.mailbox.notes[&id].blocks[0];
+    assert_eq!(block.kind, mailcraft_model::note::NoteBlockKind::Heading);
+    assert!(block.text.is_empty() && block.inline.is_empty());
 }

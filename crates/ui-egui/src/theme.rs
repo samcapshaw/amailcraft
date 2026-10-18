@@ -183,6 +183,15 @@ impl Theme {
             style.spacing.button_padding = egui::vec2(6.0, 3.0);
             style.spacing.interact_size.y = 22.0;
             style.spacing.menu_margin = egui::Margin::same(6);
+            if self.mac_style && !self.terminal_style {
+                style.text_styles.insert(TextStyle::Body, FontId::proportional(15.0));
+                style.text_styles.insert(TextStyle::Button, FontId::proportional(15.0));
+                style.text_styles.insert(TextStyle::Small, FontId::proportional(12.0));
+                style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+                style.spacing.button_padding = egui::vec2(9.0, 6.0);
+                style.spacing.interact_size.y = 28.0;
+                style.spacing.menu_margin = egui::Margin::same(10);
+            }
             style.interaction.selectable_labels = false;
         });
     }
@@ -321,11 +330,11 @@ impl Theme {
         t.unread = t.accent;
         t.link = t.accent;
         if dark {
-            t.chrome = Color32::from_rgb(39, 40, 42);
+            t.chrome = Color32::from_rgb(43, 44, 47);
             t.chrome_text = t.text;
-            t.backdrop = Color32::from_rgb(31, 33, 34);
-            t.pane = t.backdrop;
-            t.reading = t.backdrop;
+            t.backdrop = Color32::from_rgb(28, 29, 31);
+            t.pane = Color32::from_rgb(32, 33, 35);
+            t.reading = Color32::from_rgb(36, 37, 39);
             t.ribbon = t.chrome;
             t.separator = Color32::from_rgb(57, 59, 62);
             t.selected = Color32::from_rgb(37, 63, 88);
@@ -337,7 +346,9 @@ impl Theme {
         } else {
             t.chrome = Color32::from_rgb(242, 242, 244);
             t.chrome_text = t.text;
-            t.backdrop = Color32::WHITE;
+            t.backdrop = Color32::from_rgb(247, 248, 250);
+            t.pane = Color32::from_rgb(250, 250, 252);
+            t.reading = Color32::WHITE;
             t.ribbon = t.chrome;
             t.text = Color32::from_rgb(36, 36, 38);
             t.text_muted = Color32::from_rgb(128, 128, 134);

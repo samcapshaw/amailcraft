@@ -33,24 +33,68 @@ fn child(ui: &mut Ui, rect: Rect, salt: &str, layout: Layout) -> Ui {
 }
 
 fn action(ui: &mut Ui, app: &mut App, icon: &str, label: &str, command: &str, enabled: bool) {
-    let r = widgets::icon_button(ui, app, icon, "", enabled).on_hover_text(label);
+    let r = if app.theme.terminal_style {
+        widgets::icon_button(ui, app, icon, "", enabled)
+    } else {
+        let (rect, response) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::click());
+        let response = if enabled { response } else { response.on_disabled_hover_text(label) };
+        if enabled && (response.hovered() || response.has_focus()) {
+            ui.painter().rect(
+                rect,
+                7,
+                app.theme.hover,
+                Stroke::new(0.5, app.theme.separator),
+                egui::StrokeKind::Inside,
+            );
+        }
+        app.icons.paint(
+            ui,
+            Rect::from_center_size(rect.center(), vec2(22.0, 22.0)),
+            icon,
+            if enabled { app.theme.text } else { app.theme.text_muted.gamma_multiply(0.45) },
+        );
+        response
+    }
+    .on_hover_text(label);
     r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
-    if r.clicked() {
+    if enabled && r.clicked() {
         app.run(command, json!({}));
     }
 }
 
 pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
     let rect = ui.max_rect();
+    let toolbar_height = if app.theme.terminal_style { 58.0 } else { 72.0 };
     let toolbar = Rect::from_min_max(
         rect.min,
         pos2(
             rect.right(),
-            (rect.top() + if app.mail_like_module() && frame.width < 680.0 { 104.0 } else { 58.0 })
+            (rect.top() + if app.mail_like_module() && frame.width < 680.0 { 134.0 } else { toolbar_height })
                 .min(rect.bottom()),
         ),
     );
     ui.painter().rect_filled(toolbar, 0, app.theme.chrome);
+    if !app.theme.terminal_style {
+        // A restrained tonal ramp gives the unified toolbar its own material.
+        let mut mesh = egui::Mesh::default();
+        let top = app.theme.chrome.gamma_multiply(if app.theme.dark { 1.12 } else { 1.01 });
+        for (point, color) in [
+            (toolbar.left_top(), top),
+            (toolbar.right_top(), top),
+            (toolbar.right_bottom(), app.theme.chrome),
+            (toolbar.left_bottom(), app.theme.chrome),
+        ] {
+            mesh.colored_vertex(point, color);
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        ui.painter().add(egui::Shape::mesh(mesh));
+        ui.painter().hline(
+            toolbar.x_range(),
+            toolbar.top() + 0.5,
+            Stroke::new(1.0, egui::Color32::from_white_alpha(if app.theme.dark { 12 } else { 120 })),
+        );
+    }
     ui.painter().hline(toolbar.x_range(), toolbar.bottom() - 0.5, Stroke::new(1.0, app.theme.separator));
     let drag = ui.interact(toolbar, ui.id().with("mac-toolbar-drag"), Sense::drag());
     if drag.drag_started() {
@@ -64,7 +108,7 @@ pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
         toolbar.min + vec2(14.0, 0.0),
         pos2(
             (toolbar.left() + if frame.width < 700.0 { 180.0 } else { 230.0 }).min(toolbar.right()),
-            toolbar.top() + 58.0,
+            toolbar.top() + toolbar_height,
         ),
     );
     let mut c = child(ui, left, "mac-title", Layout::left_to_right(Align::Center));
@@ -83,15 +127,21 @@ pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
     }
     c.add_space(8.0);
     let title = RichText::new(if app.theme.terminal_style { "◇ MailCraft" } else { "MailCraft" })
-        .font(app.theme.detail_font(16.0))
+        .font(app.theme.detail_font(if app.theme.terminal_style { 16.0 } else { 20.0 }))
         .strong()
         .color(if app.theme.terminal_style { app.theme.importance_low } else { app.theme.text });
     c.label(title);
     let tools = Rect::from_min_max(
-        pos2((toolbar.right() - 650.0).max(left.right()), toolbar.top()),
-        pos2(toolbar.right(), toolbar.top() + 58.0),
+        pos2(
+            (toolbar.right() - if app.theme.terminal_style { 650.0 } else { 900.0 }).max(left.right()),
+            toolbar.top(),
+        ),
+        pos2(toolbar.right(), toolbar.top() + toolbar_height),
     );
     let mut c = child(ui, tools.shrink2(vec2(12.0, 0.0)), "mac-tools", Layout::left_to_right(Align::Center));
+    if !app.theme.terminal_style {
+        c.spacing_mut().item_spacing.x = 14.0;
+    }
     let mail = app.mail_like_module();
     let selected = !app.s.selection.items.is_empty() || app.s.selection.focus.is_some();
     if mail {
@@ -106,9 +156,13 @@ pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
     } else {
         module_toolbar(&mut c, app, frame);
     }
-    c.menu_button("More", |ui| {
-        ui.set_min_width(248.0);
-        ui.spacing_mut().item_spacing.y = 5.0;
+    let more = egui::containers::menu::MenuButton::from_button(
+        egui::Button::new("").frame(false).min_size(vec2(40.0, 38.0)),
+    )
+    .ui(&mut c, |ui| {
+        ui.set_min_width(292.0);
+        ui.spacing_mut().item_spacing.y = 7.0;
+        ui.spacing_mut().interact_size.y = 34.0;
         ui.label(
             RichText::new(if mail { "Mail tools" } else { "Tools" }).size(12.0).color(app.theme.text_muted),
         );
@@ -116,7 +170,14 @@ pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
         if mail {
             more_item(ui, app, "quick-steps", "Quick steps…", "", "quicksteps.manage", json!({}));
             more_item(ui, app, "filter", "Rules…", "", "rules.manage", json!({}));
+            if selected {
+                more_item(ui, app, "note", "Create note from email", "", "notes.fromMail", json!({}));
+            }
         } else {
+            if app.s.view.module == Module::Notes {
+                more_item(ui, app, "note", "Meeting notes…", "", "notes.new", json!({"template":"meeting"}));
+                more_item(ui, app, "note", "Project brief…", "", "notes.new", json!({"template":"project"}));
+            }
             ui.menu_button("All tools", |ui| crate::ribbon::module_tools_menu(ui, app));
         }
         ui.separator();
@@ -161,26 +222,50 @@ pub fn main_window(ui: &mut Ui, app: &mut App, frame: &Frame) {
             "file.options",
             json!({}),
         );
-    });
+    })
+    .0;
+    more.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "More"));
+    if more.hovered() || egui::Popup::is_any_open(ui.ctx()) {
+        ui.painter().rect_filled(more.rect, 7, app.theme.selected_folder);
+    }
+    app.icons.paint(
+        ui,
+        Rect::from_center_size(more.rect.center(), vec2(22.0, 22.0)),
+        "ellipsis",
+        app.theme.text,
+    );
+
     if mail {
         if frame.width < 680.0 {
             let search = Rect::from_min_max(
-                pos2(toolbar.left() + 16.0, toolbar.top() + 62.0),
+                pos2(toolbar.left() + 16.0, toolbar.top() + 80.0),
                 pos2(toolbar.right() - 16.0, toolbar.bottom() - 10.0),
             );
             search_field(ui, app, search);
         } else if c.available_width() > 140.0 {
-            let width = c.available_width().min(300.0);
+            let width = (c.available_width() - 12.0).min(300.0);
             let search = Rect::from_center_size(
-                pos2(toolbar.right() - width / 2.0 - 16.0, toolbar.top() + 29.0),
-                vec2(width, 34.0),
+                pos2(
+                    if app.theme.terminal_style {
+                        toolbar.right() - width / 2.0 - 16.0
+                    } else {
+                        c.cursor().min.x + 12.0 + width / 2.0
+                    },
+                    toolbar.top() + toolbar_height / 2.0,
+                ),
+                vec2(width, if app.theme.terminal_style { 34.0 } else { 40.0 }),
             );
             search_field(ui, app, search);
         }
     }
 
-    let navigation =
-        Rect::from_min_max(pos2(rect.left(), (rect.bottom() - 40.0).max(toolbar.bottom())), rect.max);
+    let navigation = Rect::from_min_max(
+        pos2(
+            rect.left(),
+            (rect.bottom() - if app.theme.terminal_style { 40.0 } else { 52.0 }).max(toolbar.bottom()),
+        ),
+        rect.max,
+    );
     module_navigation(ui, app, navigation);
     let content =
         Rect::from_min_max(pos2(rect.left(), toolbar.bottom()), pos2(rect.right(), navigation.top()));
@@ -207,7 +292,7 @@ fn more_item(
     command: &str,
     params: serde_json::Value,
 ) {
-    let (rect, response) = ui.allocate_exact_size(vec2(248.0, 36.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(292.0, 44.0), Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     if response.hovered() || response.has_focus() {
         ui.painter().rect_filled(rect, 4, app.theme.hover);
@@ -222,7 +307,7 @@ fn more_item(
         pos2(rect.left() + 39.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::proportional(15.0),
+        egui::FontId::proportional(17.0),
         app.theme.text,
     );
     ui.painter().text(
@@ -243,7 +328,7 @@ fn module_toolbar(ui: &mut Ui, app: &mut App, frame: &Frame) {
         Module::Calendar => ("appointment", "New event", "calendar.newAppointment"),
         Module::People => ("person", "New contact", "people.new"),
         Module::Tasks => ("task", "New task", "tasks.new"),
-        Module::Notes => ("note", "New note", "notes.new"),
+        Module::Notes => ("note", "New page", "notes.new"),
         _ => return,
     };
     if widgets::icon_button(ui, app, icon, label, true).clicked() {
@@ -279,7 +364,11 @@ fn module_navigation(ui: &mut Ui, app: &mut App, rect: Rect) {
     );
     ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(0.5, app.theme.separator));
     let labels = rect.width() >= 560.0;
-    let width = if labels { 106.0 } else { ((rect.width() - 24.0) / 5.0).clamp(28.0, 64.0) };
+    let width = if labels {
+        if app.theme.terminal_style { 106.0 } else { 120.0 }
+    } else {
+        ((rect.width() - 24.0) / 5.0).clamp(28.0, 64.0)
+    };
     for (i, (module, icon, label, cmd)) in [
         (Module::Mail, "mail", "Mail", "nav.mail"),
         (Module::Calendar, "calendar", "Calendar", "nav.calendar"),
@@ -292,7 +381,7 @@ fn module_navigation(ui: &mut Ui, app: &mut App, rect: Rect) {
     {
         let row = Rect::from_min_size(
             pos2(rect.left() + 12.0 + i as f32 * width, rect.top() + 5.0),
-            vec2(width - 4.0, 30.0),
+            vec2(width - 4.0, if app.theme.terminal_style { 30.0 } else { 40.0 }),
         );
         let selected = app.s.view.module == module || module == Module::Mail && app.mail_like_module();
         let r = ui.interact(row, ui.id().with(("mac-module", cmd)), Sense::click());
@@ -315,13 +404,13 @@ fn module_navigation(ui: &mut Ui, app: &mut App, rect: Rect) {
             app.theme.text_muted
         };
         let x = if labels { row.left() + 17.0 } else { row.center().x };
-        app.icons.paint(ui, Rect::from_center_size(pos2(x, row.center().y), vec2(15.0, 15.0)), icon, ink);
+        app.icons.paint(ui, Rect::from_center_size(pos2(x, row.center().y), vec2(19.0, 19.0)), icon, ink);
         if labels {
             ui.painter().text(
                 pos2(row.left() + 31.0, row.center().y),
                 egui::Align2::LEFT_CENTER,
                 label,
-                app.theme.detail_font(12.0),
+                app.theme.detail_font(if app.theme.terminal_style { 12.0 } else { 15.0 }),
                 ink,
             );
         }
@@ -361,17 +450,15 @@ fn search_field(ui: &mut Ui, app: &mut App, rect: Rect) {
     let th = app.theme.clone();
     let fill = if th.terminal_style {
         if th.dark { egui::Color32::from_rgb(22, 22, 32) } else { th.reading }
-    } else if th.dark {
-        th.chrome
     } else {
-        egui::Color32::from_rgb(246, 246, 248)
+        th.pane
     };
     ui.painter().rect(
         rect,
         if th.terminal_style { 3 } else { 8 },
         fill,
         Stroke::new(
-            if focused { 1.0 } else { 0.5 },
+            if focused { 1.5 } else { 1.0 },
             if focused { th.accent.gamma_multiply(0.65) } else { th.separator },
         ),
         egui::StrokeKind::Inside,
@@ -433,13 +520,21 @@ fn sidebar_entry(
 ) -> egui::Response {
     let compact = ui.clip_rect().height() < 650.0;
     let (rect, r) =
-        ui.allocate_exact_size(vec2(ui.available_width(), if compact { 34.0 } else { 42.0 }), Sense::click());
+        ui.allocate_exact_size(vec2(ui.available_width(), if compact { 36.0 } else { 46.0 }), Sense::click());
     let paint = rect.shrink2(vec2(12.0, 0.0));
     if selected || r.hovered() {
         ui.painter().rect_filled(
             paint,
             7,
             if selected { app.theme.selected_folder } else { app.theme.hover },
+        );
+    }
+    if selected && !app.theme.terminal_style {
+        ui.painter().rect_stroke(
+            paint.shrink(0.5),
+            7,
+            Stroke::new(0.5, app.theme.accent.gamma_multiply(0.30)),
+            egui::StrokeKind::Inside,
         );
     }
     if selected && app.theme.terminal_style {
@@ -453,11 +548,11 @@ fn sidebar_entry(
         ui,
         Rect::from_center_size(pos2(rect.left() + 30.0, rect.center().y), vec2(18.0, 18.0)),
         icon,
-        app.theme.accent,
+        if selected || app.theme.terminal_style { app.theme.accent } else { app.theme.text_muted },
     );
     let text = ui.painter().layout_no_wrap(
         label.to_owned(),
-        egui::FontId::proportional(if compact { 14.0 } else { 16.0 }),
+        egui::FontId::proportional(if compact { 15.0 } else { 17.0 }),
         app.theme.text,
     );
     ui.painter()
@@ -832,7 +927,7 @@ mod tests {
                 ("Calendar", Module::Calendar, "New event"),
                 ("Contacts", Module::People, "New contact"),
                 ("Tasks", Module::Tasks, "New task"),
-                ("Notes", Module::Notes, "New note"),
+                ("Notes", Module::Notes, "New page"),
             ] {
                 h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
                 h.run();

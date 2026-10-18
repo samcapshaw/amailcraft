@@ -23,6 +23,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 log.workspace = true
+image.workspace = true
 
 # Protocol clients and the sync worker threads: native only (the browser build has no sockets or threads).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

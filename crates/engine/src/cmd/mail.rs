@@ -2127,7 +2127,7 @@ fn find_related(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"search": query}))
 }
 
-fn open(s: &mut Session, p: &Value) -> CmdResult {
+pub(crate) fn open(s: &mut Session, p: &Value) -> CmdResult {
     let Some(focus) = primary_item(s, p) else {
         return Err(CmdError::Disabled("No message is selected.".into()));
     };

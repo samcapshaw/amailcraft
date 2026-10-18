@@ -18,6 +18,7 @@ The goal is a refined mail experience with Apple styled, PC, and Omarchy interfa
 | Settings | Icon navigation, layered grouped forms, aligned controls, switches, appearance selector, Save/Cancel |
 | Account manager | Guided Microsoft 365 setup, automatic consent profile selection, connection and requested-service status, recovery guidance, linked-mailbox entry point and advanced options |
 | Organizer | Persistent Mail/Calendar/Contacts/Tasks/Notes navigation, contextual creation actions, deeper module tools in menus |
+| Notes | Notebook/page workspace, nested pages, favourites/search, typed blocks/columns, live agendas/tasks, dated habits, page links/backlinks/tags, editable tables/local images, autosave/history, templates and source-email links; see [Notes workspace](docs/notes.md) |
 | Appearance profiles | Saved Apple styled, PC layout and Omarchy/Tokyo Night profiles, Light/Dark/Auto, custom palette editor and previews |
 | Identity | Original envelope icon, separate Mac profile and `dev.mailcraft.mac` bundle identifier |
 

@@ -656,6 +656,7 @@ fn add_notes(mb: &mut Mailbox, account: AccountId, day_start: i64) {
                 created: when,
                 modified: when,
                 categories: Vec::new(),
+                ..Default::default()
             },
         );
     }

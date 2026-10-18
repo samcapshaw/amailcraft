@@ -1504,7 +1504,8 @@ pub(crate) fn body_editor_in(
     let dark = theme_dark && !c.light_canvas;
     let palette = ((host.theme().mac_style || host.theme().custom_surfaces) && !c.light_canvas)
         .then_some((host.theme().reading, theme_text));
-    let zoom = f32::from(c.zoom_pct().clamp(10, 500)) / 100.0;
+    let zoom = f32::from(c.zoom_pct().clamp(10, 500)) / 100.0
+        * if host.theme().mac_style && !host.theme().terminal_style { 1.15 } else { 1.0 };
     let avail = ui.available_width();
     let width = if avail.is_finite() { avail.max(MIN_TEXT_W + 2.0 * PAD) } else { 800.0 };
     let text_w = (width - 2.0 * PAD).max(MIN_TEXT_W);

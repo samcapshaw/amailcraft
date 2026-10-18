@@ -626,7 +626,7 @@ fn message_view(ui: &mut Ui, app: &mut App, id: u64, surface: Surface, narrow: b
     let zoom = match app.s.view.zoom {
         0 => 1.0,
         z => f32::from(z) / 100.0,
-    };
+    } * if app.mac_style && !app.theme.terminal_style { 1.15 } else { 1.0 };
     let in_window = matches!(surface, Surface::Read(_));
 
     // Find bar and Select requests (Message › Find…, Select, the body's right-click menu).
@@ -707,10 +707,24 @@ fn message_view(ui: &mut Ui, app: &mut App, id: u64, surface: Surface, narrow: b
                     }
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
-                        if ui.add_sized([100.0, 36.0], egui::Button::new("↩ Reply")).clicked() {
+                        if ui
+                            .add_sized(
+                                [112.0, 44.0],
+                                egui::Button::new(RichText::new("↩ Reply").size(17.0))
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(Stroke::new(1.0, app.theme.separator))
+                                    .corner_radius(8),
+                            )
+                            .clicked()
+                        {
                             app.run("mail.reply", json!({"ids":[id],"window":in_window}));
                         }
-                        if ui.add_sized([100.0, 36.0], egui::Button::new("Reply all").frame(false)).clicked()
+                        if ui
+                            .add_sized(
+                                [112.0, 44.0],
+                                egui::Button::new(RichText::new("Reply all").size(17.0)).frame(false),
+                            )
+                            .clicked()
                         {
                             app.run("mail.replyAll", json!({"ids":[id],"window":in_window}));
                         }
@@ -826,9 +840,14 @@ fn header(ui: &mut Ui, app: &mut App, h: &ReadingHeader, id: u64, narrow: bool, 
     let right_rect =
         Rect::from_min_size(Pos2::new(full.right() - right_w, full.top()), Vec2::new(right_w, 80.0));
     let mut right = ui.new_child(UiBuilder::new().max_rect(right_rect).layout(Layout::top_down(Align::Max)));
-    actions(&mut right, app, id, narrow || app.mac_style, in_window);
+    if app.mac_style && !app.theme.terminal_style && !in_window {
+        let more = crate::widgets::icon_only(&mut right, app, "ellipsis", "Message actions", true);
+        egui::Popup::menu(&more).show(|ui| actions(ui, app, id, true, in_window));
+    } else {
+        actions(&mut right, app, id, narrow || app.mac_style, in_window);
+    }
     let date = if narrow { short_date(&h.date) } else { h.date.clone() };
-    if !date.is_empty() {
+    if !date.is_empty() && (!app.mac_style || app.theme.terminal_style || in_window) {
         right.add_space(4.0);
         right.label(RichText::new(date).size(12.0).color(theme.text_muted));
     }
@@ -888,7 +907,15 @@ fn header(ui: &mut Ui, app: &mut App, h: &ReadingHeader, id: u64, narrow: bool, 
                 .truncate(),
             );
             if !h.to.is_empty() {
-                recipients_line(ui, "To:", &h.to, &theme);
+                if app.mac_style && !theme.terminal_style && !in_window {
+                    ui.label(
+                        RichText::new(format!("To {} · {}", h.to, short_date(&h.date)))
+                            .size(14.0)
+                            .color(theme.text_muted),
+                    );
+                } else {
+                    recipients_line(ui, "To:", &h.to, &theme);
+                }
             }
             if !h.cc.is_empty() {
                 recipients_line(ui, "Cc:", &h.cc, &theme);

@@ -22,6 +22,7 @@
 
 pub(crate) mod dialogs;
 
+use super::common::select_folder;
 use std::collections::BTreeSet;
 
 use egui::{
@@ -256,6 +257,10 @@ pub(crate) struct TaskEditor {
 
 #[derive(Clone, Default)]
 pub(crate) struct NoteEditor {
+    pub markdown: bool,
+    pub pinned: bool,
+    pub preview: bool,
+    pub source_mail: Option<ItemId>,
     pub id: u64,
     pub text: String,
     pub color: NoteColor,
@@ -574,6 +579,10 @@ pub(crate) fn open_note(app: &App, st: &mut ModState, id: ItemId) {
     let Some(n) = app.s.mailbox.notes.get(&id) else { return };
     let nonce = st.editors.next();
     st.editors.note = Some(NoteEditor {
+        markdown: n.markdown,
+        pinned: n.pinned,
+        preview: false,
+        source_mail: n.source_mail,
         id: id.0,
         text: n.text.clone(),
         color: n.color,
@@ -636,6 +645,22 @@ fn open_from_dialog(app: &mut App, st: &mut ModState, name: &str, p: &Value) {
         },
         "note" => {
             if let Some(id) = id {
+                if app.theme_chooser_enabled || app.mac_style {
+                    st.note_edit = None;
+                    st.editors.note = None;
+                    app.run("nav.notes", json!({}));
+                    if let Some(folder) = app.s.mailbox.notes.get(&id).map(|note| note.folder) {
+                        select_folder(app, folder);
+                    }
+                    select_item(app, Some(id.0));
+                    return;
+                }
+                if app.s.mailbox.notes.get(&id).is_some_and(|note| note.markdown) {
+                    st.note_edit = None;
+                    open_note(app, st, id);
+                    select_item(app, Some(id.0));
+                    return;
+                }
                 let text = app.s.mailbox.notes.get(&id).map(|n| n.text.clone()).unwrap_or_default();
                 st.note_edit = Some((id.0, text));
                 st.note_focus = true;
@@ -740,7 +765,7 @@ fn time_combo(ui: &mut Ui, id: &str, minute: &mut i64) {
     });
 }
 
-fn categories_menu(ui: &mut Ui, app: &App, cats: &mut Vec<String>) {
+pub(super) fn categories_menu(ui: &mut Ui, app: &App, cats: &mut Vec<String>) {
     let text = if cats.is_empty() { "None".to_owned() } else { cats.join(", ") };
     ui.menu_button(text, |ui| {
         for c in &app.s.mailbox.categories {
@@ -2446,9 +2471,39 @@ fn note_window(ctx: &egui::Context, app: &mut App, st: &mut ModState) {
     }
     let mut open = true;
     let mut act = Act::None;
-    let title = ed.text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("Note").to_owned();
-    window(title, ("mc-note-editor", ed.nonce)).default_width(320.0).open(&mut open).show(ctx, |ui| {
+    let title = ed.text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("Note");
+    let title = if ed.markdown { title.trim_start_matches('#').trim() } else { title }.to_owned();
+    window(title, ("mc-note-editor", ed.nonce)).default_width(720.0).open(&mut open).show(ctx, |ui| {
         crate::dialogs::form_visuals(ui, &app.theme);
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut ed.preview, false, "Write");
+            ui.selectable_value(&mut ed.preview, true, "Preview");
+            ui.separator();
+            ui.checkbox(&mut ed.markdown, "Markdown");
+            ui.checkbox(&mut ed.pinned, "Pinned");
+            if let Some(source) = ed.source_mail {
+                if app.s.mailbox.mail.contains_key(&source) {
+                    if ui.button("Source email ↗").clicked() {
+                        app.run("notes.openSource", json!({"id":ed.id}));
+                    }
+                } else {
+                    ui.label("Source email unavailable");
+                }
+            }
+        });
+        if ed.text.trim().is_empty() {
+            ui.horizontal(|ui| {
+                ui.label("Start with a template");
+                for (key, label) in [("meeting", "Meeting notes"), ("project", "Project brief")] {
+                    if ui.button(label).clicked()
+                        && let Some(text) = mailcraft_engine::cmd::notes::template_text(key)
+                    {
+                        ed.text = text.into();
+                        ed.markdown = true;
+                    }
+                }
+            });
+        }
         ui.horizontal(|ui| {
             for (color, _, label) in super::notes_view::COLORS {
                 let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
@@ -2468,20 +2523,51 @@ fn note_window(ctx: &egui::Context, app: &mut App, st: &mut ModState) {
             ui.label("Categories");
             categories_menu(ui, app, &mut ed.categories);
         });
-        egui::Frame::new().fill(note_fill(ed.color, app.theme.dark)).inner_margin(8.0).show(ui, |ui| {
-            ui.add(
-                TextEdit::multiline(&mut ed.text)
-                    .frame(egui::Frame::NONE)
-                    .desired_rows(8)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("Type your note"),
-            );
-        });
+        ui.add_space(8.0);
+        if ed.markdown && !ed.preview {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Insert").color(app.theme.text_muted));
+                for (label, snippet) in [
+                    ("Heading", "\n## Heading\n"),
+                    ("Checklist", "\n- [ ] Action item\n"),
+                    ("Quote", "\n> Quote\n"),
+                    ("Code", "\n```\n\n```\n"),
+                ] {
+                    if ui.button(label).clicked() {
+                        ed.text.push_str(snippet);
+                    }
+                }
+            });
+        }
+        egui::Frame::new()
+            .fill(app.theme.card_surface())
+            .stroke(Stroke::new(1.0, app.theme.separator))
+            .inner_margin(20.0)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
+                    if ed.preview && ed.markdown {
+                        super::notes_view::markdown_preview(ui, &mut ed.text, &app.theme);
+                    } else if ed.preview {
+                        ui.label(&ed.text);
+                    } else {
+                        ui.add(
+                            TextEdit::multiline(&mut ed.text)
+                                .frame(egui::Frame::NONE)
+                                .desired_rows(16)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("Type your note"),
+                        );
+                    }
+                });
+            });
         ui.label(RichText::new(format!("Modified {}", ed.modified)).size(11.0).color(app.theme.text_muted));
         error_line(ui, app, &ed.error);
         ui.separator();
         buttons(ui, app, "Save & Close", true, &mut act);
     });
+    if !open && matches!(act, Act::None) {
+        act = Act::Save;
+    }
     let color_key = super::notes_view::COLORS
         .iter()
         .find(|(c, _, _)| *c == ed.color)
@@ -2489,10 +2575,13 @@ fn note_window(ctx: &egui::Context, app: &mut App, st: &mut ModState) {
         .unwrap_or("yellow");
     match act {
         Act::Save | Act::SaveSend => {
-            let p = json!({ "id": ed.id, "text": ed.text, "color": color_key, "categories": ed.categories });
+            let p = json!({ "id": ed.id, "text": ed.text, "color": color_key, "categories": ed.categories, "markdown":ed.markdown, "pinned":ed.pinned });
             match run_checked(app, "notes.update", p) {
                 Ok(_) => return,
-                Err(e) => ed.error = Some(e),
+                Err(e) => {
+                    ed.error = Some(e);
+                    open = true;
+                }
             }
         }
         Act::Delete => {

@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run -p mailcraft-ui-egui --example ui_shot -- <out.png> [WIDTHxHEIGHT] [--dark] [--module NAME]
-//!     [--reading right|bottom|off] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response|create|meeting|delete] [--graph-pending] [--caldav-preview] [--scale F]
+//!     [--reading right|bottom|off] [--select] [--classic] [--mac] [--sidebar-hidden] [--shared] [--compose] [--compose-preview] [--notes-preview] [--settings] [--accounts] [--interface apple|outlook|omarchy] [--custom-colors] [--connected-preview] [--graph-setup] [--graph-edit event|contact|response|create|meeting|delete] [--graph-pending] [--caldav-preview] [--scale F]
 //! ```
 //!
 //! Defaults: 1920x1040, light theme, Mail module, nothing selected, scale 1. `--module` takes mail, calendar,
@@ -34,6 +34,10 @@ struct Opts {
     sidebar_hidden: bool,
     compose: bool,
     compose_preview: bool,
+    notes_preview: bool,
+    notes_menu: bool,
+    notes_formatting: bool,
+    notes_template: String,
     settings: bool,
     settings_page: Option<String>,
     more_menu: bool,
@@ -46,6 +50,7 @@ struct Opts {
     graph_pending: bool,
     caldav_preview: bool,
     unified_sent: bool,
+    unified_inbox: bool,
     module: Option<String>,
     reading: Option<String>,
     select: bool,
@@ -67,6 +72,10 @@ fn parse() -> Result<Opts, String> {
         sidebar_hidden: false,
         compose: false,
         compose_preview: false,
+        notes_preview: false,
+        notes_menu: false,
+        notes_formatting: false,
+        notes_template: "meeting".into(),
         settings: false,
         settings_page: None,
         more_menu: false,
@@ -79,6 +88,7 @@ fn parse() -> Result<Opts, String> {
         graph_pending: false,
         caldav_preview: false,
         unified_sent: false,
+        unified_inbox: false,
         module: None,
         reading: None,
         select: false,
@@ -88,6 +98,11 @@ fn parse() -> Result<Opts, String> {
         match a.as_str() {
             "--sidebar-hidden" => {
                 o.sidebar_hidden = true;
+                o.mac = true;
+            }
+            "--unified-inbox" => {
+                o.unified_inbox = true;
+                o.shared = true;
                 o.mac = true;
             }
             "--shared" => {
@@ -160,6 +175,25 @@ fn parse() -> Result<Opts, String> {
                 o.mac = true;
             }
             "--mac" => o.mac = true,
+            "--notes-template" => {
+                o.notes_template = args.next().ok_or("--notes-template needs a built-in template key")?;
+                o.notes_preview = true;
+                o.mac = true;
+            }
+            "--notes-formatting" => {
+                o.notes_formatting = true;
+                o.notes_preview = true;
+                o.mac = true;
+            }
+            "--notes-menu" => {
+                o.notes_menu = true;
+                o.notes_preview = true;
+                o.mac = true;
+            }
+            "--notes-preview" => {
+                o.notes_preview = true;
+                o.mac = true;
+            }
             "--dark" => o.dark = true,
             "--classic" => o.classic = true,
             "--select" => o.select = true,
@@ -230,6 +264,9 @@ fn shoot(o: &Opts) -> Result<(), String> {
     {
         app.run("nav.selectFolder", json!({"folder": inbox.0}));
     }
+    if o.unified_inbox {
+        app.run("nav.unifiedInbox", json!({}));
+    }
     if o.unified_sent {
         app.run("nav.unifiedSent", json!({}));
     }
@@ -293,6 +330,20 @@ fn shoot(o: &Opts) -> Result<(), String> {
     }
     if let Some(m) = &o.module {
         app.run(&format!("nav.{m}"), json!({}));
+    }
+    if o.notes_preview {
+        app.run("nav.notes", json!({}));
+        if o.notes_formatting {
+            app.run("notes.new",json!({"text":"A little room to think","markdown":true,"cover":true,"contentWidth":720,"color":"blue","icon":"note","blocks":[
+                {"id":1,"kind":"paragraph","text":"A place for ideas, plans, and the details worth keeping.","inline":[{"start":12,"end":17,"bold":true},{"start":19,"end":24,"italic":true},{"start":34,"end":53,"highlight":true}]},
+                {"id":2,"kind":"heading","text":"Start with what matters"},
+                {"id":3,"kind":"paragraph","text":"Select a few words to format them. Type / on a new block to add something useful."},
+                {"id":4,"kind":"checklist","text":"Make room for one good idea"},
+                {"id":5,"kind":"callout","text":"Your words stay yours. Notes save locally as you write."}
+            ]}));
+        } else {
+            app.run("notes.new", json!({"template":o.notes_template}));
+        }
     }
     if o.connected_preview {
         let now = app.s.now();
@@ -431,6 +482,31 @@ fn shoot(o: &Opts) -> Result<(), String> {
         );
     // Fonts and icon textures settle over a few frames.
     harness.run_steps(6);
+    if o.notes_formatting
+        && let Some(page) = harness.state().ui.module_selection
+    {
+        let editor = egui::Id::new(("note-block", page, 1u64));
+        harness.ctx.memory_mut(|m| m.request_focus(editor));
+        if let Some(mut state) = egui::TextEdit::load_state(&harness.ctx, editor) {
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(12),
+                egui::text::CCursor::new(17),
+            )));
+            state.store(&harness.ctx, editor);
+        }
+        harness.run_steps(3);
+    }
+    if o.notes_menu {
+        let title = harness
+            .state()
+            .ui
+            .module_selection
+            .and_then(|id| harness.state().s.mailbox.notes.get(&mailcraft_model::ItemId(id)))
+            .map(mailcraft_engine::cmd::notes::title)
+            .ok_or("No preview note selected")?;
+        harness.get_by_label(&format!("More options for {title}")).click();
+        harness.run_steps(3);
+    }
     if o.more_menu {
         harness.get_by_label("More").click();
         harness.run_steps(3);

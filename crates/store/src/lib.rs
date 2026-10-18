@@ -452,7 +452,12 @@ impl Store {
     /// Deletes blobs not referenced by `mb` (which must be the complete current state) and leftover temp
     /// files. Returns the number of blobs removed.
     pub fn gc_blobs(&mut self, mb: &Mailbox) -> Result<usize> {
-        let live: BTreeSet<&str> = mb.mail.values().filter_map(|m| m.blob.as_deref()).collect();
+        let live: BTreeSet<&str> = mb
+            .mail
+            .values()
+            .filter_map(|m| m.blob.as_deref())
+            .chain(mb.notes.values().flat_map(|n| n.image_blobs.iter().map(String::as_str)))
+            .collect();
         // Items still holding their source may have been journaled or snapshotted with a blob key the caller
         // never saw (`append` / `checkpoint` set it on their own copy): every probe of that content is live.
         let live_content: BTreeSet<(u64, u64)> = mb

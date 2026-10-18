@@ -12,6 +12,68 @@ use egui::{
 };
 use serde_json::{Value, json};
 
+/// Deliberately small, local-only Markdown presentation; never interprets HTML or loads remote assets.
+pub(super) fn markdown_preview(ui: &mut Ui, text: &mut String, theme: &crate::theme::Theme) {
+    let mut changes = Vec::new();
+    let mut code = false;
+    for (index, line) in text.lines().take(1000).enumerate() {
+        let line: String = line.chars().take(4096).collect();
+        if line.starts_with("```") {
+            code = !code;
+            continue;
+        }
+        if code {
+            ui.label(egui::RichText::new(&line).monospace());
+            continue;
+        }
+        if let Some(content) = line.strip_prefix("- [ ] ").or_else(|| line.strip_prefix("- [x] ")) {
+            let mut checked = line.starts_with("- [x] ");
+            if ui.checkbox(&mut checked, content).changed() {
+                changes.push((index, checked));
+            }
+        } else if let Some(title) = line.strip_prefix("### ") {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(title).strong().size(16.0));
+        } else if let Some(title) = line.strip_prefix("## ") {
+            ui.add_space(12.0);
+            ui.label(egui::RichText::new(title).strong().size(19.0));
+        } else if let Some(title) = line.strip_prefix("# ") {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(title).strong().size(25.0));
+        } else if line.trim() == "---" {
+            ui.separator();
+        } else if let Some(quote) = line.strip_prefix("> ") {
+            ui.label(egui::RichText::new(quote).color(theme.text_muted).italics());
+        } else if let Some(item) = line.strip_prefix("- ") {
+            ui.label(format!("• {item}"));
+        } else if line.is_empty() {
+            ui.add_space(8.0);
+        } else if let Some(bold) = line.strip_prefix("**").and_then(|v| v.strip_suffix("**")) {
+            ui.label(egui::RichText::new(bold).strong());
+        } else {
+            ui.label(line);
+        }
+    }
+    if text.lines().count() > 1000 {
+        ui.label("Preview limited to 1,000 lines. All text is retained in Write mode.");
+    }
+    if !changes.is_empty() {
+        let trailing = text.ends_with('\n');
+        let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+        for (index, checked) in changes {
+            if let Some(line) = lines.get_mut(index)
+                && let Some(content) = line.strip_prefix("- [ ] ").or_else(|| line.strip_prefix("- [x] "))
+            {
+                *line = format!("- [{}] {content}", if checked { "x" } else { " " });
+            }
+        }
+        *text = lines.join("\n");
+        if trailing {
+            text.push('\n');
+        }
+    }
+}
+
 use mailcraft_engine::cmd::calendar::pim::Kind;
 use mailcraft_engine::cmd::notes::{IconMode, NotesViewState, title};
 use mailcraft_engine::cmd::view::modules::{ModuleKind, ModuleView};
@@ -73,6 +135,10 @@ fn order(app: &App) -> Vec<ItemId> {
 }
 
 pub(super) fn show(ui: &mut Ui, app: &mut App) {
+    if app.theme_chooser_enabled || app.mac_style {
+        super::notes_workspace::show(ui, app);
+        return;
+    }
     let ctx = ui.ctx().clone();
     let mut st = load(&ctx);
     super::common::ensure_folder(app, Kind::Note);
@@ -115,6 +181,10 @@ fn commit_edit(app: &mut App, st: &mut ModState) {
 }
 
 fn start_edit(app: &App, st: &mut ModState, id: ItemId) {
+    if app.s.mailbox.notes.get(&id).is_some_and(|note| note.markdown) {
+        super::editors::open_note(app, st, id);
+        return;
+    }
     let text = app.s.mailbox.notes.get(&id).map(|n| n.text.clone()).unwrap_or_default();
     st.note_edit = Some((id.0, text));
     st.note_focus = true;
@@ -259,13 +329,26 @@ fn reading(ui: &mut Ui, app: &mut App, st: &mut ModState, rect: Rect) {
         ScrollArea::vertical().id_salt("mc-notes-reading-scroll").auto_shrink([false, false]).show(
             ui,
             |ui| {
-                ui.label(egui::RichText::new(&n.text).color(app.theme.text));
+                if n.markdown {
+                    let mut text = n.text.clone();
+                    markdown_preview(ui, &mut text, &app.theme);
+                    if text != n.text {
+                        app.run("notes.update", json!({"id":id.0,"text":text}));
+                    }
+                } else {
+                    ui.label(egui::RichText::new(&n.text).color(app.theme.text));
+                }
             },
         );
     });
 }
 
 fn note_menu(ui: &mut Ui, app: &mut App, st: &mut ModState, id: ItemId) {
+    let pinned = app.s.mailbox.notes.get(&id).is_some_and(|note| note.pinned);
+    if ui.button(if pinned { "Unpin note" } else { "Pin note" }).clicked() {
+        app.run("notes.update", json!({"id":id.0,"pinned":!pinned}));
+        ui.close();
+    }
     if ui.button("Open").clicked() {
         commit_edit(app, st);
         super::editors::open_note(app, st, id);
@@ -372,7 +455,7 @@ fn paint_note(ui: &Ui, app: &App, card: Rect, n: &Note, selected: bool, small: b
         return;
     }
     let inner = card.shrink2(vec2(10.0, 8.0));
-    let t = title(n);
+    let t = if n.pinned { format!("Pinned · {}", title(n)) } else { title(n) };
     let head = paint_text_clipped(
         ui,
         pos2(inner.min.x, band.max.y + 4.0),

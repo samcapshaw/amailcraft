@@ -1343,8 +1343,16 @@ fn mail_panes(ui: &mut Ui, app: &mut App, frame: &Frame, area: Rect) {
     let saved_frac = saved("state.listFractionPermille").map(|p| p / 1000.0);
     let (mut folder_w, mut list_w, mut list_frac) = with_shell(&ctx, |st| {
         (
-            st.folder_w.or(saved_folder).unwrap_or(if app.mac_style { 270.0 } else { size::FOLDER_PANE }),
-            st.list_w.or(saved_list).unwrap_or(if app.mac_style { 400.0 } else { size::LIST }),
+            st.folder_w.or(saved_folder).unwrap_or(if app.mac_style {
+                if theme.terminal_style { 270.0 } else { 300.0 }
+            } else {
+                size::FOLDER_PANE
+            }),
+            st.list_w.or(saved_list).unwrap_or(if app.mac_style {
+                if theme.terminal_style { 400.0 } else { 420.0 }
+            } else {
+                size::LIST
+            }),
             st.list_frac.or(saved_frac).unwrap_or(size::BOTTOM_LIST_FRACTION),
         )
     });

@@ -126,20 +126,12 @@ pub(super) fn run(
     let result = (|| -> Result<(), NetError> {
         let client = conn.connect()?;
         if let Some(job) = job {
-            let mut bytes = 0usize;
-            for id in &job.full {
-                if stopped() {
-                    return Ok(());
-                }
-                let raw = client.mime(id)?;
-                bytes = bytes.saturating_add(raw.len());
-                if bytes > 64 * 1024 * 1024 {
-                    return Err(NetError::TooLarge("Graph full-message download batch".into()));
-                }
-                if !events.send(Event::GraphFull { account, remote: id.clone(), raw }) {
-                    return Ok(());
-                }
-            }
+            fetch_full_messages(
+                &job.full,
+                cancel,
+                |id| client.mime(id),
+                |id, raw| events.send(Event::GraphFull { account, remote: id.to_owned(), raw }),
+            )?;
         }
         let mut write_error = None;
         if let Some(job) = job {
@@ -274,6 +266,89 @@ pub(super) fn run(
     })();
     if stopped() { Some("Send/Receive was cancelled.".into()) } else { result.err().map(|e| e.to_string()) }
 }
+/// Preserve fields omitted by Graph's sparse delta events, including repeated events in one run.
+fn delta_keywords(value: &Value, previous: Option<&JmapShadow>) -> Vec<String> {
+    let mut keywords = previous.map(|s| s.keywords.clone()).unwrap_or_default();
+    let mut set = |key: &str, enabled: bool| {
+        keywords.retain(|k| k != key);
+        if enabled {
+            keywords.push(key.into());
+        }
+    };
+    let boolean = |key| {
+        value.get(key).and_then(|v| {
+            v.as_bool().or_else(|| match v.as_str() {
+                Some(s) if s.eq_ignore_ascii_case("true") => Some(true),
+                Some(s) if s.eq_ignore_ascii_case("false") => Some(false),
+                _ => None,
+            })
+        })
+    };
+    if let Some(read) = boolean("isRead") {
+        set("$seen", read);
+    }
+    if let Some(draft) = boolean("isDraft") {
+        set("$draft", draft);
+    }
+    if let Some(flag) = value
+        .pointer("/flag/flagStatus")
+        .and_then(Value::as_str)
+        .filter(|f| matches!(*f, "flagged" | "complete" | "notFlagged"))
+    {
+        set("$flagged", flag == "flagged");
+        set("$complete", flag == "complete");
+    }
+    keywords.sort();
+    keywords.dedup();
+    keywords
+}
+
+fn fetch_full_messages(
+    ids: &[String],
+    cancel: &AtomicBool,
+    mut fetch: impl FnMut(&str) -> Result<Vec<u8>, NetError>,
+    mut emit: impl FnMut(&str, Vec<u8>) -> bool,
+) -> Result<(), NetError> {
+    let mut bytes = 0usize;
+    let mut failures = 0usize;
+    let mut consecutive = 0usize;
+    for id in ids.iter().take(100) {
+        if cancel.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let raw = match fetch(id) {
+            Ok(raw) => {
+                consecutive = 0;
+                raw
+            }
+            Err(NetError::TooLarge(_) | NetError::Http { status: 400 | 404 | 410 | 422, .. }) => {
+                failures = failures.saturating_add(1);
+                consecutive = consecutive.saturating_add(1);
+                if consecutive >= 3 {
+                    return Err(NetError::Refused(
+                        "Three consecutive message downloads failed; remaining messages will wait.".into(),
+                    ));
+                }
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        bytes = bytes.saturating_add(raw.len());
+        if bytes > 64 * 1024 * 1024 {
+            return Err(NetError::TooLarge("Graph full-message download batch".into()));
+        }
+        if !emit(id, raw) {
+            return Ok(());
+        }
+    }
+    if failures > 0 {
+        return Err(NetError::Refused(format!(
+            "{failures} message downloads failed; other requested messages were downloaded. Failed messages remain available to retry."
+        )));
+    }
+    Ok(())
+}
+
 /// A page is applied and journaled as a unit before its progress is persisted.
 pub(super) struct Checkpoint {
     pub(super) previews: BTreeMap<String, Value>,
@@ -417,6 +492,7 @@ fn download_mail(
     let mut queue: VecDeque<_> = order.into();
     let mut visited = BTreeSet::new();
     let mut known: BTreeSet<_> = job.shadow.keys().cloned().collect();
+    let mut state = job.shadow.clone();
     let mut bytes = 0usize;
     for _ in 0..100 {
         if cancel.load(Ordering::SeqCst) {
@@ -479,19 +555,8 @@ fn download_mail(
                 return Err(NetError::TooLarge("Graph download round".into()));
             }
             known.insert(id.clone());
-            let mut keywords = Vec::new();
-            if value.get("isRead").and_then(Value::as_bool) == Some(true) {
-                keywords.push("$seen".into());
-            }
-            if value.get("isDraft").and_then(Value::as_bool) == Some(true) {
-                keywords.push("$draft".into());
-            }
-            match value.pointer("/flag/flagStatus").and_then(Value::as_str) {
-                Some("flagged") => keywords.push("$flagged".into()),
-                Some("complete") => keywords.push("$complete".into()),
-                _ => {}
-            }
-            keywords.sort();
+            let keywords = delta_keywords(&value, state.get(&id));
+            state.insert(id.clone(), JmapShadow { mailbox: folder.clone(), keywords: keywords.clone() });
             list.push(JEmail {
                 id,
                 mailboxes: vec![folder.clone()],
@@ -609,6 +674,74 @@ mod tests {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::time::Duration;
+
+    #[test]
+    fn sparse_delta_preserves_unmentioned_flags_and_accepts_text_read_state() {
+        let old = JmapShadow {
+            mailbox: "inbox".into(),
+            keywords: vec!["$draft".into(), "$flagged".into(), "$seen".into()],
+        };
+        let next = delta_keywords(&json!({"id":"m", "isRead":"false"}), Some(&old));
+        assert_eq!(next, vec!["$draft", "$flagged"]);
+        let old = JmapShadow { keywords: next, ..old };
+        assert_eq!(
+            delta_keywords(&json!({"flag":{"flagStatus":"complete"}}), Some(&old)),
+            vec!["$complete", "$draft"]
+        );
+        assert_eq!(
+            delta_keywords(&json!({"isRead":null,"flag":{"flagStatus":"junk"}}), Some(&old)),
+            old.keywords
+        );
+    }
+
+    #[test]
+    fn full_download_skips_individual_failures_but_stops_on_account_failures() {
+        let ids = vec!["bad".into(), "good".into(), "large".into(), "last".into()];
+        let mut emitted = Vec::new();
+        let result = fetch_full_messages(
+            &ids,
+            &AtomicBool::new(false),
+            |id| match id {
+                "bad" => Err(NetError::Http { status: 400, body: String::new() }),
+                "large" => Err(NetError::TooLarge("fixture".into())),
+                _ => Ok(vec![1]),
+            },
+            |id, _| {
+                emitted.push(id.to_owned());
+                true
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(emitted, vec!["good", "last"]);
+        for status in [401, 403, 429, 503] {
+            let mut calls = 0;
+            let result = fetch_full_messages(
+                &ids,
+                &AtomicBool::new(false),
+                |_| {
+                    calls += 1;
+                    Err(NetError::Http { status, body: String::new() })
+                },
+                |_, _| true,
+            );
+            assert!(result.is_err());
+            assert_eq!(calls, 1);
+        }
+        let mut calls = 0;
+        assert!(
+            fetch_full_messages(
+                &ids,
+                &AtomicBool::new(false),
+                |_| {
+                    calls += 1;
+                    Err(NetError::TooLarge("fixture".into()))
+                },
+                |_, _| true
+            )
+            .is_err()
+        );
+        assert_eq!(calls, 3);
+    }
 
     #[test]
     fn interrupted_download_emits_a_durable_continuation_before_failure() {

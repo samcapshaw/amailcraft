@@ -142,3 +142,17 @@ Account setup uses the same grouped forms as Settings: provider choice cards, la
 separate incoming/outgoing server sections and aligned service switches. Shared/delegated setup is
 also reachable from the first Add Account screen. Microsoft 365 sign-in stays visible; advanced
 sign-in and server options remain expandable. Saving settings still does not verify mailbox access.
+
+## Apple presentation
+
+The Apple profile uses a unified content toolbar with larger original action icons, an icon-based
+More menu and grouped, generously spaced menu rows. The mailbox sidebar remains collapsible, and
+message-list/reader dividers remain draggable. Sender/date context is grouped in the reader;
+secondary message actions are available from its three-dot menu and Reply/Reply all remain below.
+
+Compose uses aligned sender, recipient and subject rules, an explicit sender disclosure, optional
+Cc/Bcc and formatting, a joined Send/options control, and the persistent signature footer. Close draft
+uses the existing save/discard flow. The Apple body canvas has a 15% larger presentation baseline;
+message formatting and the stored font sizes are unchanged. PC and Omarchy retain their palettes and
+shell choices. Bundled weighted fonts are used for message-list emphasis rather than simulated bold
+when those faces are installed.

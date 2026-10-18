@@ -70,9 +70,15 @@ pub(crate) struct Text {
     faux_bold: bool,
 }
 
-/// A bold font family installed by the shell (any `FontFamily::Name` containing "bold"), if there is one.
+/// Prefer bundled semibold/bold weights, then named bold faces supplied by a host.
 pub(crate) fn bold_family(ctx: &egui::Context) -> Option<FontFamily> {
     ctx.fonts(|f| {
+        for weight in [600, 700] {
+            let family = FontFamily::Name(crate::face_key(mailcraft_fonts::UI_FAMILY, weight, false).into());
+            if f.definitions().families.contains_key(&family) {
+                return Some(family);
+            }
+        }
         let mut best: Option<(i32, FontFamily)> = None;
         for fam in f.definitions().families.keys() {
             let FontFamily::Name(name) = fam else { continue };
@@ -864,7 +870,7 @@ fn mac_header(ui: &mut Ui, app: &mut App, c: &Cached, rect: Rect, mode: Mode) {
     } else {
         app.s.mailbox.folder(app.s.selection.folder).map(|f| f.name.as_str()).unwrap_or("Mail")
     };
-    Text::new(ui, folder, 27.0, true, th.text, rect.width() - 48.0, 1)
+    Text::new(ui, folder, 30.0, true, th.text, rect.width() - 48.0, 1)
         .paint(&painter, pos2(rect.left() + 24.0, rect.top() + 22.0));
     let account = app.s.current_account().and_then(|id| app.s.mailbox.account(id));
     let subtitle = if app.s.view.unified_inbox {
@@ -880,8 +886,16 @@ fn mac_header(ui: &mut Ui, app: &mut App, c: &Cached, rect: Rect, mode: Mode) {
             .map(|a| if a.address.is_empty() { a.display_name.clone() } else { a.address.clone() })
             .unwrap_or_default()
     };
-    Text::new(ui, &subtitle, 14.0, false, th.text_muted, rect.width() - 48.0, 1)
-        .paint(&painter, pos2(rect.left() + 24.0, rect.top() + 58.0));
+    Text::new(
+        ui,
+        &subtitle,
+        if th.terminal_style { 14.0 } else { 16.0 },
+        false,
+        th.text_muted,
+        rect.width() - 48.0,
+        1,
+    )
+    .paint(&painter, pos2(rect.left() + 24.0, rect.top() + 58.0));
     let y = rect.top() + 91.0;
     let (labels, active) = if c.focused_tabs {
         let other =
@@ -1073,7 +1087,7 @@ fn body(ui: &mut Ui, app: &mut App, c: &Cached, rect: Rect, mode: Mode, st: &mut
         (if c.vs.tighter_spacing {
             96.0
         } else if rect.height() > 650.0 {
-            144.0
+            if app.theme.terminal_style { 144.0 } else { 136.0 }
         } else {
             112.0
         }) + 18.0 * f32::from(c.vs.preview_lines.saturating_sub(1).min(2))
@@ -1460,6 +1474,9 @@ fn item_row(
     let fill = row_fill(&th, row, hovered, header_of_selection, c.highlight_flagged && !app.mac_style);
     if let Some(fill) = fill {
         painter.rect_filled(r, 0.0, fill);
+        if row.selected && app.mac_style && !th.terminal_style {
+            painter.hline(r.x_range(), r.top() + 0.5, Stroke::new(0.5, th.accent.gamma_multiply(0.35)));
+        }
     }
     if th.terminal_style && row.selected {
         painter.rect_filled(Rect::from_min_size(r.min, vec2(2.0, r.height())), 0.0, th.accent);
@@ -1921,7 +1938,7 @@ fn paint_mac_compact(
         ui,
         &row.subject,
         17.0,
-        look,
+        Look { bold: app.theme.terminal_style && look.bold, ..look },
         rule_color(&row.style, th.text),
         (right - left).max(20.0),
         1,

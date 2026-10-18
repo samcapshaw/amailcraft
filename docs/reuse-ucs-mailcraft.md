@@ -1,5 +1,23 @@
 # UCS-Care-Group MailCraft: update review
 
+## Reliability follow-up: 2026-10-17 (later snapshot)
+
+Reviewed the 38 commits after the previous snapshot through
+[`ddf626819e54cb35c41f711ad6936567f7ba64eb`](https://github.com/UCS-Care-Group/mailcraft/tree/ddf626819e54cb35c41f711ad6936567f7ba64eb).
+The comparison JSON is in ignored `target/scratch/ucs-latest-compare.json`.
+
+Our independently implemented follow-up preserves omitted Graph delta keyword fields (read,
+draft and flag), including successive events during one download round. Full-message fetch batches
+continue past HTTP 400/404/410/422 and oversized individual responses, report the failures without
+including message identifiers or server response bodies, and stop after three consecutive individual
+failures. Network, authentication, throttling and other failures still stop immediately. Successful
+content is emitted normally; failed items remain incomplete for a later explicit retry. Existing batch
+size and cancellation limits remain in force. Regression tests cover sparse updates, mixed successes,
+consecutive failures and account-wide refusals. No upstream code or assets were copied.
+
+The delta `$expand` removal does not apply: our requests already omit that expansion. Shared-mailbox
+sending/drafts and Gmail archive/delete changes remain candidates for separate work.
+
 ## Follow-up review: 2026-10-17
 
 Pinned snapshot: [`a030a7209e3b8543aa4679e34c502798452ea88d`](https://github.com/UCS-Care-Group/mailcraft/tree/a030a7209e3b8543aa4679e34c502798452ea88d).

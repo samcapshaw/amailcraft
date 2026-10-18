@@ -14,6 +14,7 @@ pub struct UndoEntry {
 
 #[derive(Clone, Debug)]
 pub struct UndoStack {
+    pub(crate) note_group: Option<(mailcraft_model::ItemId, i64)>,
     pub undo: Vec<UndoEntry>,
     pub redo: Vec<UndoEntry>,
     /// Maximum depth (oldest dropped).
@@ -22,7 +23,7 @@ pub struct UndoStack {
 
 impl Default for UndoStack {
     fn default() -> Self {
-        Self { undo: Vec::new(), redo: Vec::new(), limit: DEFAULT_LIMIT }
+        Self { undo: Vec::new(), redo: Vec::new(), limit: DEFAULT_LIMIT, note_group: None }
     }
 }
 
@@ -41,12 +42,28 @@ impl UndoStack {
 
     /// Records a new step (a fresh command): clears redo, drops the oldest beyond the limit.
     pub fn push(&mut self, entry: UndoEntry) {
+        self.note_group = None;
         self.redo.clear();
         self.push_keep_redo(entry);
     }
 
+    /// Adjacent autosaves form one undo step, while every edit is still journaled.
+    pub(crate) fn push_note_edit(&mut self, entry: UndoEntry, id: mailcraft_model::ItemId, now: i64) {
+        let merge = self
+            .note_group
+            .is_some_and(|(page, time)| page == id && (0..=2).contains(&now.saturating_sub(time)))
+            && self.undo.last().is_some_and(|last| last.label == entry.label);
+        if merge {
+            self.redo.clear();
+        } else {
+            self.push(entry);
+        }
+        self.note_group = Some((id, now));
+    }
+
     /// Records a step without touching redo (used by redo).
     pub fn push_keep_redo(&mut self, entry: UndoEntry) {
+        self.note_group = None;
         self.undo.push(entry);
         let cap = self.cap();
         Self::trim(&mut self.undo, cap);
@@ -54,6 +71,7 @@ impl UndoStack {
 
     /// Records a redo step (used by undo).
     pub fn push_redo(&mut self, entry: UndoEntry) {
+        self.note_group = None;
         self.redo.push(entry);
         let cap = self.cap();
         Self::trim(&mut self.redo, cap);
@@ -78,6 +96,7 @@ impl UndoStack {
     }
 
     pub fn clear(&mut self) {
+        self.note_group = None;
         self.undo.clear();
         self.redo.clear();
     }

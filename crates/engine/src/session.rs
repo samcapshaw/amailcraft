@@ -686,7 +686,16 @@ impl Session {
                 let ops = diff_ops(&before, &self.mailbox);
                 if !ops.is_empty() {
                     if self.automatic_depth == 0 {
-                        self.undo.push(UndoEntry { label: spec.label.to_owned(), before: Box::new(before) });
+                        let entry = UndoEntry { label: spec.label.to_owned(), before: Box::new(before) };
+                        if id == "notes.update"
+                            && params.get("autosave").and_then(Value::as_bool) == Some(true)
+                            && let Some(page) = params.get("id").and_then(Value::as_u64)
+                        {
+                            let now = self.now().unix;
+                            self.undo.push_note_edit(entry, ItemId(page), now);
+                        } else {
+                            self.undo.push(entry);
+                        }
                     }
                     self.journal(ops);
                 }
