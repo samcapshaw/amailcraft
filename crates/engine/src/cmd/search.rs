@@ -33,6 +33,26 @@ fn spec(
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec(
+            "search.server",
+            "Search Microsoft 365",
+            "Search › Server",
+            "",
+            r#"{"action"?:"show|search|more|cancel|results","query"?:string,"scope"?:"folder|mailbox|all","account"?:number}"#,
+            false,
+            always,
+            crate::sync::server_search::command,
+        ),
+        spec(
+            "search.openServerResult",
+            "Open Server Result",
+            "Search › Server results",
+            "",
+            r#"{"index":number}"#,
+            true,
+            always,
+            crate::sync::server_search::open,
+        ),
+        spec(
             "search.advancedFind",
             "Advanced Find",
             "Search › Options › Search Tools",
@@ -228,9 +248,17 @@ fn summary(s: &Session) -> Value {
 // ---------------------------------------------------------------------------------------------------------
 // Enabled predicates
 
-/// Every item is held locally (no server-side window), so there are never older results to include.
-fn all_local(_s: &Session) -> Option<&'static str> {
-    Some("all items are already available locally")
+/// The inherited search tool now opens the explicit Microsoft 365 search window.
+fn all_local(s: &Session) -> Option<&'static str> {
+    if cfg!(target_arch = "wasm32") {
+        Some("server search requires the desktop app")
+    } else if !s.mailbox.accounts.iter().any(|a| a.kind == mailcraft_model::AccountKind::Graph) {
+        Some("connect a Microsoft 365 mailbox to search its server")
+    } else if s.view.search.trim().is_empty() {
+        Some("enter a search first")
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -281,8 +309,11 @@ fn recent(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "items": items, "placeholder": placeholder, "max": MAX_RECENT }))
 }
 
-fn include_older_results(_s: &mut Session, _p: &Value) -> CmdResult {
-    Ok(json!({ "on": false }))
+fn include_older_results(s: &mut Session, p: &Value) -> CmdResult {
+    crate::sync::server_search::command(
+        s,
+        &json!({"action":if opt_bool(p,"on") == Some(false) {"cancel"} else {"show"}}),
+    )
 }
 
 fn search_tools(s: &mut Session, p: &Value) -> CmdResult {

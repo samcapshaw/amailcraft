@@ -11,6 +11,7 @@ The goal is a refined mail experience with Apple styled, PC, and Omarchy interfa
 | Mac shell | Compact toolbar and search, neutral icons, light/dark appearances, system font loading on macOS |
 | Unified mailboxes | Combined Inbox and Sent folders, scoped search, source-aware message actions |
 | Graph mail | OAuth Graph transport, folder discovery, checkpointed preview-first delta sync, on-demand MIME/attachments, coordinated throttling, read/flag/move/delete and sending; local fixture validation |
+| Server search | Explicit Microsoft 365 folder/mailbox search, transient paged additional results and on-demand opening through the normal reader; synthetic validation, see [limits](docs/server-search.md) |
 | CalDAV calendars | Read-only discovery, saved sources, credential recovery, disconnect controls and scheduled background refresh into offline snapshots; bounded event window, no server writes |
 | Connected organizer | Opt-in Graph calendars (90 days back, one year ahead) and default contacts; offline snapshots, selected conditional edits, single timed appointment creation/deletion and meeting invitations, attendee responses and persistent pending-change review |
 | Linked mailboxes | Shared/delegated labels, independent OAuth grants, receive-only default, explicit Send As opt-in; optional receive-only Graph access through an explicitly linked owner's sign-in with coordinated automatic renewal |

@@ -15,7 +15,10 @@ export TMPDIR CARGO_BUILD_JOBS
 cargo build -p mailcraft
 app="$PWD/dist/MailCraft Mac.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp target/debug/mailcraft "$app/Contents/MacOS/mailcraft"
+# Keep the old executable inode intact for a running app until the user relaunches it.
+next_binary_path="$app/Contents/MacOS/.mailcraft-next-$$"
+cp target/debug/mailcraft "$next_binary_path"
+mv -f "$next_binary_path" "$app/Contents/MacOS/mailcraft"
 cp assets/app-icon/mailcraft.icns "$app/Contents/Resources/mailcraft.icns"
 version=$(awk '/^\[workspace.package\]/{section=1;next} /^\[/{section=0} section && /^version = /{gsub(/"/, "", $3); split($3, parts, "-"); print parts[1]; exit}' Cargo.toml)
 sed -e 's/@APP_ID@/dev.mailcraft.mac/g' -e "s/@VERSION@/$version/g" -e 's/@BUILD@/1/g' \

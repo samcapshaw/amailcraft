@@ -430,6 +430,7 @@ impl Session {
     /// made, starts automatic runs that are due, and journals everything. Returns true when the mailbox or
     /// the status changed. Never panics: a panic while applying results restores the mailbox.
     pub fn poll_sync(&mut self) -> bool {
+        let search_changed = server_search::poll(self);
         let status_before = self.sync.status.clone();
         let mailbox_changed = poll_events(self);
         tick(self);
@@ -446,7 +447,7 @@ impl Session {
         {
             refresh_status(self);
         }
-        mailbox_changed || self.sync.status != status_before
+        search_changed || mailbox_changed || self.sync.status != status_before
     }
 
     /// Polls until no account is busy and no queued change is due (or `timeout` passes). For the CLI, the
@@ -1393,6 +1394,8 @@ fn carry_over(live: &Mailbox, restored: &mut Mailbox, track: &Track) {
             m.raw = l.raw.clone();
             m.blob = l.blob.clone();
             m.attachments = l.attachments.clone();
+            m.attachments_pending = l.attachments_pending;
+            m.server_search_preview = l.server_search_preview;
             m.preview = l.preview.clone();
             m.size = l.size;
             m.subject = l.subject.clone();
@@ -1507,6 +1510,7 @@ pub(crate) mod graph_pim;
 mod jmap;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
+pub mod server_search;
 
 // =======================================================================================================
 // OAuth sign-in

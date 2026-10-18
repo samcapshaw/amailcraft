@@ -680,3 +680,5 @@ mod desktop_appearance_tests {
         assert_eq!(app.theme, original);
     }
 }
+
+mod server_search;

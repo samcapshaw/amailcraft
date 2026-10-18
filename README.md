@@ -65,6 +65,7 @@ The underlying mail engine, CLI, and MCP integration come from upstream. This fo
 | Settings | Category navigation, grouped forms, appearance selection, Save/Cancel, and a separate account manager |
 | Calendar and organizer | Persistent Calendar, Contacts, Tasks, and Notes navigation; local editing plus opt-in Microsoft 365 calendars/default contacts, single appointment creation/deletion and meeting invitations, selected server-confirmed edits and attendee responses |
 | Notes | Local notebooks and nested pages, columns and movable blocks, live calendar/task cards, dated habits, page links/backlinks, tags, templates, images, and revision history; see [Notes workspace](docs/notes.md) |
+| Server search | Explicit Microsoft 365 mailbox/folder search, shared-mailbox credential binding, paged additional results and on-demand opening; [details and limits](docs/server-search.md) |
 | Other tools | Existing rules, quick steps, import/export, print/PDF, CLI, and MCP |
 
 CalDAV calendars can be discovered, saved and refreshed manually or automatically into read-only offline snapshots (90 days back, one year ahead). See [CalDAV calendars](docs/caldav.md) for provider and recurrence limits.

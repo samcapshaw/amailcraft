@@ -267,7 +267,7 @@ pub(super) fn run(
     if stopped() { Some("Send/Receive was cancelled.".into()) } else { result.err().map(|e| e.to_string()) }
 }
 /// Preserve fields omitted by Graph's sparse delta events, including repeated events in one run.
-fn delta_keywords(value: &Value, previous: Option<&JmapShadow>) -> Vec<String> {
+pub(super) fn delta_keywords(value: &Value, previous: Option<&JmapShadow>) -> Vec<String> {
     let mut keywords = previous.map(|s| s.keywords.clone()).unwrap_or_default();
     let mut set = |key: &str, enabled: bool| {
         keywords.retain(|k| k != key);

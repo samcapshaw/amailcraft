@@ -34,6 +34,7 @@ struct Opts {
     sidebar_hidden: bool,
     compose: bool,
     compose_preview: bool,
+    server_search_preview: bool,
     notes_preview: bool,
     notes_menu: bool,
     notes_formatting: bool,
@@ -72,6 +73,7 @@ fn parse() -> Result<Opts, String> {
         sidebar_hidden: false,
         compose: false,
         compose_preview: false,
+        server_search_preview: false,
         notes_preview: false,
         notes_menu: false,
         notes_formatting: false,
@@ -107,6 +109,10 @@ fn parse() -> Result<Opts, String> {
             }
             "--shared" => {
                 o.shared = true;
+                o.mac = true;
+            }
+            "--server-search-preview" => {
+                o.server_search_preview = true;
                 o.mac = true;
             }
             "--compose-preview" => {
@@ -289,6 +295,12 @@ fn shoot(o: &Opts) -> Result<(), String> {
         && let Ok(account) = app.s.run("accounts.add", &json!({"kind":"graph", "graphCalendars":true, "graphContacts":true, "address":"graph@example.net", "default":false, "incoming":{"host":"https://graph.microsoft.com/v1.0"}})) {
             app.s.notify(mailcraft_engine::Notice::OpenDialog("addAccount".into(), json!({"change":account.get("account")})));
         }
+    if o.server_search_preview {
+        app.s.view.work_offline = true;
+        app.run("accounts.add",json!({"kind":"graph","address":"team@example.net","displayName":"Design team","incoming":{"host":"https://graph.microsoft.com/v1.0"}}));
+        app.run("search.query", json!({"text":"budget"}));
+        app.run("search.server", json!({"action":"show"}));
+    }
     if o.accounts {
         app.run("file.accountSettings", json!({}));
     }

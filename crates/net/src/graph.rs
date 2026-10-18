@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 mod pace;
+mod search;
 
 pub const ENDPOINT: &str = "https://graph.microsoft.com/v1.0";
 const MAX_PAGES: usize = 1000;

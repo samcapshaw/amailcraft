@@ -611,6 +611,7 @@ fn column_icon(c: &ColumnSpec) -> Option<&'static str> {
 // Entry point.
 
 pub fn message_list(ui: &mut Ui, app: &mut App, frame: &Frame) {
+    crate::server_search::entry(ui, app);
     let ctx = ui.ctx().clone();
     let mut st: ListState = ctx.data_mut(|d| d.get_temp(state_id())).unwrap_or_default();
     let key = fingerprint(&app.s);
@@ -649,6 +650,7 @@ pub fn message_list(ui: &mut Ui, app: &mut App, frame: &Frame) {
     ui.advance_cursor_after_rect(full);
     ctx.data_mut(|d| d.insert_temp(state_id(), st));
     conversation_scope_prompt(&ctx, app);
+    crate::server_search::window(&ctx, app);
 }
 
 // -------------------------------------------------------------------------------------------------------------

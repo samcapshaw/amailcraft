@@ -2050,8 +2050,10 @@ fn apply_all(s: &mut Session, events: Vec<Event>) {
                     .map(|m| m.id);
                 if let Some(id) = id {
                     let incomplete = super::cmds::is_header_only(s, id);
+                    let historical = s.mailbox.mail.get(&id).is_some_and(|m| m.server_search_preview);
                     if fill_item(s, id, &raw)
                         && incomplete
+                        && !historical
                         && s.mailbox.mail.get(&id).is_some_and(|m| {
                             Some(m.folder) == s.mailbox.role_folder(account, FolderRole::Inbox)
                         })
@@ -3280,6 +3282,33 @@ mod graph_delivery_tests {
     }
 
     #[test]
+    fn historical_search_content_does_not_trigger_new_mail_rules() {
+        let mut s = crate::sample::sample_session();
+        let value=s.run("accounts.add",&json!({"kind":"graph","address":"history@example.net","incoming":{"host":mailcraft_net::graph::ENDPOINT}})).unwrap();
+        let account = AccountId(value["account"].as_u64().unwrap() as u32);
+        let folder = s.mailbox.role_folder(account, FolderRole::Inbox).unwrap();
+        let id = s.mailbox.add_mail(MailItem {
+            folder,
+            remote_id: Some("historical".into()),
+            server_search_preview: true,
+            ..Default::default()
+        });
+        s.sync.prefs.data.headers_only.insert(id.0);
+        s.run("rules.create",&json!({"name":"Arrival only","conditions":[{"SubjectContains":["Historical"]}],"actions":[{"AssignCategory":"Blue category"}]})).unwrap();
+        apply_all(
+            &mut s,
+            vec![Event::GraphFull {
+                account,
+                remote: "historical".into(),
+                raw: b"From: maya@example.net\r\nSubject: Historical\r\n\r\nOld mail".to_vec(),
+            }],
+        );
+        assert_eq!(s.mailbox.mail[&id].subject, "Historical");
+        assert!(s.mailbox.mail[&id].categories.is_empty());
+        assert!(!s.mailbox.mail[&id].server_search_preview);
+    }
+
+    #[test]
     fn preview_checkpoint_and_full_content_keep_identity_and_local_flags() {
         let mut s = crate::sample::sample_session();
         let value = s.run("accounts.add", &json!({"kind":"graph", "address":"preview@example.net", "incoming":{"host":mailcraft_net::graph::ENDPOINT}})).unwrap();
@@ -3334,6 +3363,8 @@ mod graph_delivery_tests {
         s.mailbox = preview_snapshot;
         super::super::after_restore(&mut s, &live);
         assert!(s.mailbox.mail[&id].raw.is_some(), "Undo must not discard downloaded content");
+        assert!(!s.mailbox.mail[&id].has_attachments(), "Undo must not resurrect the old attachment hint");
+        assert!(!s.mailbox.mail[&id].server_search_preview);
     }
 
     #[test]

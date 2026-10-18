@@ -186,6 +186,7 @@ pub struct Session {
     pub(crate) caldav: crate::cmd::caldav::State,
     /// Search index, recent searches and search toggles (see `search_index.rs`).
     pub search: crate::search_index::SearchState,
+    pub server_search: crate::sync::server_search::State,
     /// Profile settings: File › Options and the option dialogs (see `settings.rs`). Saved with the view state
     /// to `settings.json` in the profile folder after every command that changes them.
     pub settings: Settings,
@@ -232,6 +233,7 @@ impl Session {
             sync: crate::sync::SyncState::default(),
             caldav: crate::cmd::caldav::State::default(),
             search: crate::search_index::SearchState::default(),
+            server_search: crate::sync::server_search::State::default(),
             settings: Settings::default(),
             settings_dir: None,
             settings_saved: None,
@@ -710,6 +712,9 @@ impl Session {
             }
             self.flush_pending();
         }
+        if id == "search.openServerResult" && result.is_ok() {
+            crate::sync::server_search::finish_open(self);
+        }
         self.tidy_selection();
         self.sync_settings_from_session();
         if let Err(e) = self.save_settings() {
@@ -768,6 +773,9 @@ impl Session {
                     log::error!("could not fold the journal into a snapshot: {e}");
                 }
             }
+        }
+        if self.pending_ops.is_empty() {
+            crate::sync::server_search::finish_open(self);
         }
     }
 

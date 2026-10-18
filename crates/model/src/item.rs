@@ -130,6 +130,9 @@ pub struct MailItem {
     /// Attachment hint for preview-only server mail; replaced by parsed MIME on full download.
     #[serde(default)]
     pub attachments_pending: bool,
+    /// A historical server-search preview is not a new-mail arrival when its body is fetched.
+    #[serde(default)]
+    pub server_search_preview: bool,
     /// First ~255 chars of body text, whitespace collapsed (list preview line).
     pub preview: String,
     pub body: Body,

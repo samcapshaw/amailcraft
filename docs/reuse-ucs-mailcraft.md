@@ -23,7 +23,13 @@ also overlaps our existing `encoding_rs` decoder and extra mail aliases; compare
 replacing it. Linux browser activation and keyring changes warrant separate platform testing before
 adoption. Background-save fixes concern a different persistence implementation.
 
-Recommended implementation order: preview attachment metadata and confirmed-send response marks,
+Implemented independently after this review: preview attachment hints, confirmed-submission response
+markers with durable source bindings, and explicit bounded Graph server search with transient results.
+Regression fixtures cover persistence, stale identities, mailbox/folder continuation checks, cancellation,
+deduplication and explicit paging. The implementation keeps our command registry, account bindings,
+reader/download worker and all desktop appearance profiles. No upstream source or assets were copied.
+
+Historical recommended implementation order: preview attachment metadata and confirmed-send response marks,
 then server search, followed by measured persistent/background indexing. No code, assets or fonts
 were imported by this review. Upstream changes have not been validated against a live tenant here.
 

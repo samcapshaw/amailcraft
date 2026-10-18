@@ -164,3 +164,10 @@ The original receives its response marker only after the sending server accepts 
 A failed, delayed or uncertain submission leaves that marker unchanged; server acceptance does not
 prove delivery to the recipient. Restored Outbox items keep the link, and a removed or replaced
 source message is not marked by a stale link.
+
+### Search beyond downloaded mail
+
+During a mail search, choose **Search Microsoft 365…** above the message list. The separate window
+searches a folder, mailbox or all Microsoft 365 mailboxes only when you press Search server. It uses
+Microsoft 365 search syntax; local-only filters are not applied. Additional results stay transient until
+opened in the normal reader. See [Server search](server-search.md) for paging, permissions and limits.
