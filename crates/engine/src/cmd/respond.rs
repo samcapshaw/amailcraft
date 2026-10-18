@@ -823,7 +823,11 @@ The badge reader is down. Please use the side door today.";
         assert_eq!(to, [("alice@example.com", Some("Rivera, Alice"))]);
         let cc: Vec<&str> = sent.cc.iter().map(|a| a.addr.as_str()).collect();
         assert_eq!(cc, ["bob@example.org", "carol@example.com"]);
-        assert!(matches!(s.mailbox.mail[&src].response, mailcraft_model::ResponseState::RepliedAll(_)));
+        assert_eq!(s.mailbox.mail[&src].response, mailcraft_model::ResponseState::None);
+        assert!(matches!(
+            sent.pending_response.as_ref().unwrap().response,
+            mailcraft_model::ResponseState::RepliedAll(_)
+        ));
     }
 
     #[test]

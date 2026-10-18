@@ -321,6 +321,7 @@ fn save_compose(s: &mut Session, cid: u64) -> Option<ItemId> {
     item.received = now;
     item.read = true;
     item.is_draft = true;
+    item.pending_response = crate::cmd::compose::pending_response(s, &c);
     item.sent = None;
     item.body.format = c.format;
     let id = match c.draft.filter(|d| s.mailbox.mail.contains_key(d)) {

@@ -156,3 +156,11 @@ uses the existing save/discard flow. The Apple body canvas has a 15% larger pres
 message formatting and the stored font sizes are unchanged. PC and Omarchy retain their palettes and
 shell choices. Bundled weighted fonts are used for message-list emphasis rather than simulated bold
 when those faces are installed.
+
+### Queued reply status
+
+Reply, Reply All and Forward retain their original message identity in local drafts and the Outbox.
+The original receives its response marker only after the sending server accepts the submission.
+A failed, delayed or uncertain submission leaves that marker unchanged; server acceptance does not
+prove delivery to the recipient. Restored Outbox items keep the link, and a removed or replaced
+source message is not marked by a stale link.

@@ -49,6 +49,15 @@ pub enum ResponseState {
     Forwarded(DateTime),
 }
 
+/// Local source identity retained until a queued reply or forward is accepted by its server.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingResponse {
+    pub source: ItemId,
+    pub account: crate::AccountId,
+    pub message_id: Option<String>,
+    pub response: ResponseState,
+}
+
 /// Focused Inbox classification.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FocusClass {
@@ -126,6 +135,8 @@ pub struct MailItem {
     pub body: Body,
     pub is_draft: bool,
     pub response: ResponseState,
+    #[serde(default)]
+    pub pending_response: Option<PendingResponse>,
     pub focus: FocusClass,
     /// Conversation key (see `subject::conversation_topic` and threading in the engine).
     pub conversation: Option<u64>,

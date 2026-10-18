@@ -2367,6 +2367,27 @@ fn landed(s: &mut Session, account: AccountId, item: ItemId, folder: String, uid
     }
 }
 
+/// Consume the source link once and mark only the same message in the same source account.
+fn confirm_response(s: &mut Session, item: ItemId) {
+    let Some(link) = s.mailbox.mail.get_mut(&item).and_then(|m| m.pending_response.take()) else { return };
+    let valid = s.mailbox.mail.get(&link.source).is_some_and(|m| {
+        m.message_id == link.message_id
+            && s.mailbox.folder(m.folder).is_some_and(|f| f.account == link.account)
+    });
+    if !valid {
+        return;
+    }
+    let now = s.now();
+    if let Some(original) = s.mailbox.mail.get_mut(&link.source) {
+        original.response = match link.response {
+            mailcraft_model::ResponseState::Replied(_) => mailcraft_model::ResponseState::Replied(now),
+            mailcraft_model::ResponseState::RepliedAll(_) => mailcraft_model::ResponseState::RepliedAll(now),
+            mailcraft_model::ResponseState::Forwarded(_) => mailcraft_model::ResponseState::Forwarded(now),
+            mailcraft_model::ResponseState::None => return,
+        };
+    }
+}
+
 fn message_sent(s: &mut Session, account: AccountId, item: ItemId, result: Result<(), String>) {
     if let Some(b) = s.sync.runs.get_mut(&account).and_then(|r| r.busy.as_mut()) {
         b.sending.remove(&item);
@@ -2379,6 +2400,7 @@ fn message_sent(s: &mut Session, account: AccountId, item: ItemId, result: Resul
     let subject = if m.subject.trim().is_empty() { "(no subject)".to_owned() } else { m.subject.clone() };
     match result {
         Ok(()) => {
+            confirm_response(s, item);
             // "Automatically add people I email to the Safe Senders List" (Junk Email Options).
             crate::junk::on_sent(s, &[item]);
             // Save Sent Item To: Do Not Save, or another folder.
@@ -3115,6 +3137,58 @@ mod tests {
         apply_all(&mut s, vec![pop3_new(acct, "u3", "Ann <ann@example.org>", "later")]);
         let later = s.mailbox.mail.values().find(|m| m.subject == "later").unwrap();
         assert_eq!(later.focus, mailcraft_model::FocusClass::Other);
+    }
+
+    #[test]
+    fn response_marks_wait_for_success_and_preserve_source_identity() {
+        use mailcraft_model::{ResponseState, item::PendingResponse};
+        let (mut s, _, _) = session();
+        let account = imap_account(&mut s);
+        let inbox = s.mailbox.role_folder(account, FolderRole::Inbox).unwrap();
+        let outbox = s.mailbox.role_folder(account, FolderRole::Outbox).unwrap();
+        let source = s.mailbox.add_mail(MailItem {
+            folder: inbox,
+            message_id: Some("original@example.net".into()),
+            ..Default::default()
+        });
+        let link = PendingResponse {
+            source,
+            account,
+            message_id: Some("original@example.net".into()),
+            response: ResponseState::RepliedAll(s.now()),
+        };
+        let item = s.mailbox.add_mail(MailItem {
+            folder: outbox,
+            pending_response: Some(link.clone()),
+            ..Default::default()
+        });
+        // A persisted Outbox survives a restart with its source link intact.
+        s.mailbox = serde_json::from_slice(&serde_json::to_vec(&s.mailbox).unwrap()).unwrap();
+        message_sent(&mut s, account, item, Err("offline".into()));
+        assert_eq!(s.mailbox.mail[&source].response, ResponseState::None);
+        assert!(s.mailbox.mail[&item].pending_response.is_some());
+        message_sent(&mut s, account, item, Ok(()));
+        assert!(matches!(s.mailbox.mail[&source].response, ResponseState::RepliedAll(_)));
+        assert!(s.mailbox.mail.get(&item).is_none_or(|m| m.pending_response.is_none()));
+        s.mailbox.mail.get_mut(&source).unwrap().response = ResponseState::None;
+        s.mailbox.mail.get_mut(&source).unwrap().message_id = Some("replacement@example.net".into());
+        let stale = s.mailbox.add_mail(MailItem {
+            folder: outbox,
+            pending_response: Some(link.clone()),
+            ..Default::default()
+        });
+        message_sent(&mut s, account, stale, Ok(()));
+        assert_eq!(s.mailbox.mail[&source].response, ResponseState::None);
+        let mut wrong_account = link;
+        wrong_account.message_id = Some("replacement@example.net".into());
+        wrong_account.account = AccountId(u32::MAX);
+        let stale = s.mailbox.add_mail(MailItem {
+            folder: outbox,
+            pending_response: Some(wrong_account),
+            ..Default::default()
+        });
+        message_sent(&mut s, account, stale, Ok(()));
+        assert_eq!(s.mailbox.mail[&source].response, ResponseState::None);
     }
 
     #[test]

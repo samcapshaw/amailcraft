@@ -813,6 +813,27 @@ fn item_from(b: &MessageBuilder, now: DateTime) -> (MailItem, Vec<u8>) {
     (item, raw)
 }
 
+/// Bind a response to the original local message, including drafts restored after a restart.
+pub(crate) fn pending_response(
+    s: &Session,
+    c: &ComposeState,
+) -> Option<mailcraft_model::item::PendingResponse> {
+    let response = match c.kind {
+        ComposeKind::Reply => ResponseState::Replied(s.now()),
+        ComposeKind::ReplyAll => ResponseState::RepliedAll(s.now()),
+        ComposeKind::Forward => ResponseState::Forwarded(s.now()),
+        _ => return c.draft.and_then(|id| s.mailbox.mail.get(&id)).and_then(|m| m.pending_response.clone()),
+    };
+    let source = c.source?;
+    let original = s.mailbox.mail.get(&source)?;
+    Some(mailcraft_model::item::PendingResponse {
+        source,
+        account: s.mailbox.folder(original.folder)?.account,
+        message_id: original.message_id.clone(),
+        response,
+    })
+}
+
 /// Saves compose `cid` as a draft (updating its draft item when it has one). Returns the draft id.
 pub fn save_draft(s: &mut Session, cid: u64) -> Result<ItemId, CmdError> {
     let c = s.composes.get(&cid).cloned().ok_or_else(|| CmdError::Disabled(NO_COMPOSE.into()))?;
@@ -845,6 +866,7 @@ pub fn save_draft(s: &mut Session, cid: u64) -> Result<ItemId, CmdError> {
     item.received = now;
     item.sensitivity = c.sensitivity;
     item.flag = c.flag.clone();
+    item.pending_response = pending_response(s, &c);
     item.body.format = c.format;
     let id = match existing {
         Some((id, _)) => {
@@ -967,19 +989,12 @@ fn send(s: &mut Session, p: &Value) -> CmdResult {
     item.bcc = b.bcc.iter().flat_map(Address::mailboxes).collect();
     item.sensitivity = c.sensitivity;
     item.flag = c.flag.clone();
+    item.pending_response = pending_response(s, &c);
     let id = s.mailbox.add_mail(item);
     // Auto-Complete list (most recently used first).
     s.mailbox.record_recipients(&c.recipients(), now);
     if let Some(d) = c.draft {
         s.mailbox.mail.remove(&d);
-    }
-    if let Some(src) = c.source.and_then(|sid| s.mailbox.mail.get_mut(&sid)) {
-        match c.kind {
-            ComposeKind::Reply => src.response = ResponseState::Replied(now),
-            ComposeKind::ReplyAll => src.response = ResponseState::RepliedAll(now),
-            ComposeKind::Forward => src.response = ResponseState::Forwarded(now),
-            _ => {}
-        }
     }
     s.composes.remove(&cid);
     // Rules for sent messages (Cc, defer delivery, sensitivity…) edit the Outbox copy before it goes out.
@@ -3510,7 +3525,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn plain_text_sends_text_only_and_reply_marks_source() {
+    fn plain_text_queues_response_without_marking_source() {
         let mut s = session();
         let inbox = s.mailbox.folders.values().find(|f| f.role == Some(FolderRole::Inbox)).unwrap().id;
         let src = s.mailbox.add_mail(MailItem {
@@ -3533,7 +3548,8 @@ pub(crate) mod tests {
         let m = folder_items(&s, FolderRole::Outbox)[0];
         assert!(m.body.html.is_none());
         assert_eq!(m.in_reply_to, vec!["q@x".to_string()]);
-        assert!(matches!(s.mailbox.mail[&src].response, ResponseState::Replied(_)));
+        assert_eq!(s.mailbox.mail[&src].response, ResponseState::None);
+        assert_eq!(m.pending_response.as_ref().unwrap().source, src);
     }
 
     #[test]
