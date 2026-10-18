@@ -118,6 +118,9 @@ pub struct MailItem {
     pub flag: FlagState,
     pub categories: Vec<String>,
     pub attachments: Vec<AttachmentMeta>,
+    /// Attachment hint for preview-only server mail; replaced by parsed MIME on full download.
+    #[serde(default)]
+    pub attachments_pending: bool,
     /// First ~255 chars of body text, whitespace collapsed (list preview line).
     pub preview: String,
     pub body: Body,
@@ -216,7 +219,7 @@ impl MailItem {
         }
     }
     pub fn has_attachments(&self) -> bool {
-        self.attachments.iter().any(|a| !a.inline)
+        self.attachments_pending || self.attachments.iter().any(|a| !a.inline)
     }
     pub fn is_flagged(&self) -> bool {
         matches!(self.flag, FlagState::Flagged { .. })

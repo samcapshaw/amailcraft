@@ -364,10 +364,22 @@ pub(super) fn apply_checkpoint(
     new_inbox: &mut Vec<mailcraft_model::ItemId>,
 ) {
     for (remote, value) in page.previews {
-        if s.mailbox.mail.values().any(|m| {
-            m.remote_id.as_ref() == Some(&remote)
-                && s.mailbox.folder(m.folder).is_some_and(|f| f.account == account)
-        }) {
+        if let Some(id) = s
+            .mailbox
+            .mail
+            .values()
+            .find(|m| {
+                m.remote_id.as_ref() == Some(&remote)
+                    && s.mailbox.folder(m.folder).is_some_and(|f| f.account == account)
+            })
+            .map(|m| m.id)
+        {
+            if super::cmds::is_header_only(s, id)
+                && let Some(hint) = value.get("hasAttachments").and_then(Value::as_bool)
+                && let Some(item) = s.mailbox.mail.get_mut(&id)
+            {
+                item.attachments_pending = hint;
+            }
             continue;
         }
         let folder = page
@@ -437,6 +449,7 @@ pub(super) fn apply_checkpoint(
                 .and_then(Value::as_str)
                 .map(|v| v.trim_matches(['<', '>']).chars().take(2048).collect()),
             received,
+            attachments_pending: value.get("hasAttachments").and_then(Value::as_bool).unwrap_or(false),
             ..Default::default()
         };
         let adopt = item.message_id.as_ref().and_then(|mid| {

@@ -3212,7 +3212,7 @@ mod graph_delivery_tests {
         let account = AccountId(value["account"].as_u64().unwrap() as u32);
         let folder = s.mailbox.role_folder(account, FolderRole::Inbox).unwrap();
         s.mailbox.folders.get_mut(&folder).unwrap().remote_name = Some("inbox".into());
-        let preview = json!({"subject":"Preview subject","bodyPreview":"First lines","from":{"emailAddress":{"address":"maya@example.net","name":"Maya"}},"receivedDateTime":"2026-10-17T12:30:00Z"});
+        let preview = json!({"hasAttachments":true,"subject":"Preview subject","bodyPreview":"First lines","from":{"emailAddress":{"address":"maya@example.net","name":"Maya"}},"receivedDateTime":"2026-10-17T12:30:00Z"});
         let page = || Event::GraphMailPage {
             account,
             page: Box::new(super::super::graph::Checkpoint {
@@ -3233,6 +3233,10 @@ mod graph_delivery_tests {
         let id = s.mailbox.items_in(folder)[0].id;
         assert!(super::super::cmds::is_header_only(&s, id));
         assert_eq!(s.mailbox.mail[&id].preview, "First lines");
+        assert!(s.mailbox.mail[&id].has_attachments());
+        let serialized = serde_json::to_string(&s.mailbox.mail[&id]).unwrap();
+        let restored: MailItem = serde_json::from_str(&serialized).unwrap();
+        assert!(restored.has_attachments());
         s.mailbox.mail.get_mut(&id).unwrap().read = true;
         apply_batch(&mut s, vec![page()]);
         assert_eq!(s.mailbox.items_in(folder).len(), 1);
@@ -3248,6 +3252,7 @@ mod graph_delivery_tests {
         );
         assert!(!super::super::cmds::is_header_only(&s, id));
         assert_eq!(s.mailbox.mail[&id].subject, "Full subject");
+        assert!(!s.mailbox.mail[&id].has_attachments(), "Full MIME replaces the preview hint");
         assert!(s.mailbox.mail[&id].read);
         assert!(s.mailbox.mail[&id].raw.is_some());
         assert_eq!(s.mailbox.mail[&id].remote_id.as_deref(), Some("remote-message"));

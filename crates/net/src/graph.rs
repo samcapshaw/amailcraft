@@ -384,7 +384,7 @@ impl GraphClient {
 
     /// One message delta page. Callers checkpoint it before following the next link.
     pub fn messages_delta_page(&self, folder: &str, cursor: Option<&str>) -> Result<GraphPage> {
-        let url=cursor.map(str::to_owned).unwrap_or_else(||self.url(&format!("mailFolders/{}/messages/delta?$select=id,parentFolderId,isRead,isDraft,flag,receivedDateTime,subject,from,toRecipients,ccRecipients,replyTo,internetMessageId,bodyPreview&$orderby=receivedDateTime%20desc&$top=100",percent_encode(folder))));
+        let url=cursor.map(str::to_owned).unwrap_or_else(||self.url(&format!("mailFolders/{}/messages/delta?$select=id,parentFolderId,isRead,isDraft,flag,receivedDateTime,subject,from,toRecipients,ccRecipients,replyTo,internetMessageId,bodyPreview,hasAttachments&$orderby=receivedDateTime%20desc&$top=100",percent_encode(folder))));
         self.checked_url(&url)?;
         let bytes = self.request("GET", &url, "application/json", None)?;
         let doc: Value = serde_json::from_slice(&bytes).map_err(|e| NetError::Protocol(e.to_string()))?;

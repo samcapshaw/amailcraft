@@ -1,5 +1,33 @@
 # UCS-Care-Group MailCraft: update review
 
+## Follow-up review: 2026-10-18
+
+Compared the last reviewed `ddf626819e54cb35c41f711ad6936567f7ba64eb` snapshot with
+[`bb355432e3143efe58a444b870e18a70191b2484`](https://github.com/UCS-Care-Group/mailcraft/tree/bb355432e3143efe58a444b870e18a70191b2484):
+66 additional commits, including merges. GitHub comparison patches were inspected without running
+upstream code; the comparison is saved locally in ignored `target/scratch/ucs-review-2026-10-18.json`.
+
+| Priority | Candidate | Comparison with our current code |
+|---|---|---|
+| 1 | Preserve Graph `hasAttachments` on preview-only messages (`2b4c47b`) | Our preview delta selection omits it and `MailItem::has_attachments` only checks downloaded attachments. This is a concrete gap for paperclips, attachment searches and rules before MIME arrives. |
+| 2 | Mark replied/forwarded only after successful submission (`006d5df`) | Our compose send currently sets the original response state when queuing in Outbox. Their persistent source binding and successful-send update provide useful scenarios for failed, delayed and resumed sending. Adapt to our model and account isolation. |
+| 3 | Explicit server-side Graph search (`77a3253`, PR 191) | Adds folder/mailbox/shared-mailbox search, paged session-only results, deduplication and on-demand opening. Our local index does not cover mail not downloaded. Keep our search scopes, credential binding, cancellation and uncertain-write policy. |
+| 4 | Persistent background word index (`bb789e5`, PR 184) and 200,000-message benchmark (`6c52ddf`) | We already have a ranked inverted index with incremental updates, accent folding and phrase support. The useful remaining design is background startup/persistence and measured large-mailbox performance, not replacement of our search crate. No upstream benchmark result is a measurement of our app. |
+| 5 | Inline image/text and centred HTML layout (`2fb782a`) | Useful rendering fixtures for newsletters and signatures. Our HTML representation differs; evaluate visual failures before changing conversion or layout. |
+| 6 | Open attachments with native programs (`577e9ba`, `cf25ec4`) | A useful cross-platform feature candidate with filename sanitisation and file-type checks; needs our own host service and synthetic tests. |
+
+Their 16 MB HTTP ceiling correction (`4a81010`) does not match our current defect: our Graph HTTP
+and MIME parser limits are already 64 MB. Supporting larger messages is a separate end-to-end memory
+and parser-budget decision, not a one-line ceiling increase. Their WHATWG charset decoder (`7d8e7f8`)
+also overlaps our existing `encoding_rs` decoder and extra mail aliases; compare fixtures rather than
+replacing it. Linux browser activation and keyring changes warrant separate platform testing before
+adoption. Background-save fixes concern a different persistence implementation.
+
+Recommended implementation order: preview attachment metadata and confirmed-send response marks,
+then server search, followed by measured persistent/background indexing. No code, assets or fonts
+were imported by this review. Upstream changes have not been validated against a live tenant here.
+
+
 ## Reliability follow-up: 2026-10-17 (later snapshot)
 
 Reviewed the 38 commits after the previous snapshot through
